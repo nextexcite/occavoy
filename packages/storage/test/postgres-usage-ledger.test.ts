@@ -186,6 +186,38 @@ RUN_DB("postgres usage ledger (requires DATABASE_URL)", () => {
     expect(rows[3]?.metadata).toMatchObject({ obligation: "unknown-handoff" });
   });
 
+  it("rejects a cost currency that does not match the case allowance", async () => {
+    const tenantId = `usage-currency-${randomUUID()}`;
+    const snapshot = await createCaseFixture(store, tenantId, "case-usage-currency");
+    await ledger.initializeAllowance({
+      tenantId,
+      caseId: snapshot.scope.caseId,
+      maxModelCalls: 2,
+      maxToolCalls: 1,
+      maxCostMinor: 500,
+      currency: "HKD",
+    });
+    await expect(
+      ledger.reserveUsage({
+        tenantId,
+        relationshipId: snapshot.scope.relationshipId,
+        caseId: snapshot.scope.caseId,
+        taskId: "task-currency",
+        kind: "model_call",
+        quantity: 1,
+        costMinor: 100,
+        currency: "USD",
+        metadata: { costCategory: "production_api" },
+      }),
+    ).rejects.toMatchObject({ code: "invalid_usage_reservation" });
+    expect(await ledger.getAllowance(tenantId, snapshot.scope.caseId)).toMatchObject({
+      usedModelCalls: 0,
+      usedCostMinor: 0,
+      status: "active",
+    });
+    expect(await ledger.listUsage(tenantId, snapshot.scope.caseId)).toEqual([]);
+  });
+
   it("closes one case allowance without closing the relationship or a follow-up allowance", async () => {
     const tenantId = `usage-close-${randomUUID()}`;
     const first = await createCaseFixture(store, tenantId, "case-usage-close-1");

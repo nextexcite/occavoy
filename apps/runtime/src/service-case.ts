@@ -141,7 +141,9 @@ export class ServiceCaseCoordinator {
       now: this.now(),
       authority,
     });
-    await this.afterDecision(command.tenantId, command.caseId, result.decision);
+    if (!result.deduplicated && result.decision.outcome === "applied") {
+      await this.afterDecision(command.tenantId, command.caseId, result.decision);
+    }
     return result;
   }
 
@@ -167,7 +169,9 @@ export class ServiceCaseCoordinator {
       now: this.now(),
       authority,
     });
-    await this.afterDecision(tenantId, receipt.caseId, result.decision);
+    if (!result.deduplicated && result.decision.outcome === "applied") {
+      await this.afterDecision(tenantId, receipt.caseId, result.decision);
+    }
     return result;
   }
 
@@ -316,11 +320,14 @@ export class ServiceCaseCoordinator {
       maxCostMinor: null,
       currency: null,
     };
-    await this.deps.usageLedger.initializeAllowance({
-      tenantId: row.tenantId,
-      caseId: row.caseId,
-      ...allowance,
-    });
+    const existingAllowance = await this.deps.usageLedger.getAllowance(row.tenantId, row.caseId);
+    if (!existingAllowance) {
+      await this.deps.usageLedger.initializeAllowance({
+        tenantId: row.tenantId,
+        caseId: row.caseId,
+        ...allowance,
+      });
+    }
 
     const key = keyOf(row.tenantId, row.caseId, task.taskId);
     const existing = this.jobs.get(key);

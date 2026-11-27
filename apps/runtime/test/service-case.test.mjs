@@ -151,8 +151,17 @@ dbTest(
       supplierRequests,
       cancelCalls,
     });
+    await usageLedger.initializeAllowance({
+      tenantId,
+      caseId,
+      maxModelCalls: 2,
+      maxToolCalls: 2,
+      maxCostMinor: 777,
+      currency: "GBP",
+    });
     const activation = await activateAndDrain(coordinator, snapshot, "task-recover");
     assert.equal(runnerStarts, 1);
+    assert.equal((await usageLedger.getAllowance(tenantId, caseId)).maxCostMinor, 777);
     let state = await store.getCase(tenantId, caseId);
     assert.equal(state.phase, "sourcing");
     assert.equal(state.activeTask, null);
@@ -331,6 +340,101 @@ dbTest(
     );
     assert.equal(candidateCommands.rows.length, 1);
     assert.equal(candidateCommands.rows[0].outcome, "ignored");
+
+    t.after(() => pool.end());
+  },
+);
+
+dbTest(
+  "a duplicate historical activation receipt does not abort the replacement job",
+  async (t) => {
+    const pool = new pg.Pool({ connectionString: DATABASE_URL });
+    await applyMigrations(pool);
+    const store = new PostgresCaseStore(pool);
+    const usageLedger = new PostgresUsageLedger(pool);
+    const tenantId = `service-duplicate-${randomUUID()}`;
+    const caseId = "case-service-duplicate";
+    const { event, snapshot } = await createFixture(store, tenantId, caseId);
+    const supplierRequests = [];
+    const cancelCalls = [];
+    let releaseReplacement;
+    let replacementStarted;
+    const replacementGate = new Promise((resolve) => {
+      releaseReplacement = resolve;
+    });
+    const replacementStartedPromise = new Promise((resolve) => {
+      replacementStarted = resolve;
+    });
+    const script = async (spec, controls) => {
+      await controls.reserveModelCall();
+      if (spec.taskId === "task-new") {
+        replacementStarted();
+        await Promise.race([
+          replacementGate,
+          new Promise((resolve, reject) => {
+            controls.signal.addEventListener(
+              "abort",
+              () => reject(new Error("replacement was incorrectly aborted")),
+              { once: true },
+            );
+          }),
+        ]);
+      }
+      return defaultScriptedCandidate(spec);
+    };
+    const coordinator = makeCoordinator({
+      store,
+      usageLedger,
+      runnerScript: script,
+      supplierRequests,
+      cancelCalls,
+    });
+    await activateAndDrain(coordinator, snapshot, "task-old");
+    let current = await store.getCase(tenantId, caseId);
+    const revisedBrief = {
+      id: snapshot.brief.id,
+      version: 2,
+      eventId: event.id,
+      destination: event.destination,
+      budget: { amountMinor: 120000, currency: "GBP" },
+      approverActorId: "payer-fixture",
+    };
+    const revision = await coordinator.submitCommand(
+      command(
+        snapshot,
+        { kind: "revise_brief", brief: revisedBrief },
+        "revise-complete",
+        current.revision,
+      ),
+      authority(tenantId, caseId, "revise_brief"),
+    );
+    assert.equal(revision.decision.outcome, "applied");
+    current = revision.decision.state;
+    const replacementActivation = await coordinator.submitCommand(
+      command(
+        snapshot,
+        { kind: "activate", taskId: "task-new", maxModelCalls: 2, maxToolCalls: 1 },
+        "task-new-activate",
+        current.revision,
+      ),
+      authority(tenantId, caseId, "activate"),
+    );
+    assert.equal(replacementActivation.decision.outcome, "applied");
+    const drainPromise = coordinator.drainCase(tenantId, caseId);
+    await replacementStartedPromise;
+
+    const historical = (await store.getCommand(tenantId, "task-old-activate")).command;
+    const duplicate = await coordinator.submitCommand(
+      historical,
+      authority(tenantId, caseId, "activate"),
+    );
+    assert.equal(duplicate.deduplicated, true);
+    releaseReplacement();
+    const drain = await drainPromise;
+    assert.equal(drain.errors.length, 0);
+    const finished = await store.getCase(tenantId, caseId);
+    assert.equal(finished.activeTask, null);
+    assert.equal(finished.brief.version, 2);
 
     t.after(() => pool.end());
   },

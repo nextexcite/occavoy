@@ -219,6 +219,17 @@ export class PostgresUsageLedger {
         );
       }
       const before = allowanceRow(locked.rows[0]);
+      if (
+        costMinor > 0 &&
+        before.currency !== null &&
+        input.currency !== undefined &&
+        input.currency !== before.currency
+      ) {
+        throw new UsageAllowanceError(
+          "invalid_usage_reservation",
+          `Usage currency ${input.currency} does not match allowance currency ${before.currency}`,
+        );
+      }
       let admitted = false;
       let rejection: "budget_exhausted" | "allowance_closed" | null = null;
       if (input.kind === "reconciliation_lookup") {
