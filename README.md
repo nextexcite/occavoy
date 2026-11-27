@@ -1,0 +1,104 @@
+# Occavoy
+
+Occavoy turns reasons to travel into a continuing service: discover an occasion, clarify the
+customer's brief, obtain partner quotes, approve a specific offer, and follow the work through
+booking and fulfilment. Customer relationships and channel partners continue across trips.
+
+**Initial audience: Hong Kong consumers. Destinations: global from day one.**
+
+This repository is the engineering home for the first product. The first milestone is a
+partner-facing demonstration within four weeks; a usable assisted-service pilot follows within
+eight weeks, with a bounded commercial experiment before twelve weeks. Work and acceptance
+criteria live in [Linear OCA](https://linear.app/tianjis/project/occavoy-poc-to-commercial-pilot-f8786e997b5e).
+
+## Start developing
+
+Install [mise](https://mise.jdx.dev/getting-started.html), then:
+
+```sh
+git clone https://github.com/nextexcite/occavoy.git
+cd occavoy
+mise trust
+mise install
+mise run bootstrap
+mise run dev
+```
+
+The web preview runs at `http://localhost:3000`. In another terminal:
+
+```sh
+export OCCAVOY_RUNTIME_MODE=local
+export OCCAVOY_RUNTIME_DEMO_TOKEN="$(openssl rand -hex 32)"
+mise run runtime
+```
+
+The runtime is a separate Rivet development probe. Its start command and verification procedure
+are documented in [apps/runtime/README.md](apps/runtime/README.md). The web preview does not yet
+send real service requests to it. Local development requires no production credentials.
+
+```sh
+mise run check
+mise run experiment -- supplier-quotes
+```
+
+The first command runs TypeScript checks, tests, the Workers frontend build, and Python checks.
+The second creates another package in the `uv` experiment workspace; run `uv sync --all-packages`
+after adding its dependencies. See [experiments](experiments/README.md).
+
+## Workspace
+
+| Path                | Responsibility                                                  |
+| ------------------- | --------------------------------------------------------------- |
+| `apps/web`          | TanStack Start frontend and Cloudflare Workers request boundary |
+| `apps/runtime`      | Rivet Cloud-compatible actor runtime and local durability probe |
+| `packages/domain`   | Global destination, money, event, brief and approval contracts  |
+| `packages/storage`  | 8 GB object admission policy and persistent-ledger contract     |
+| `experiments/*`     | Isolated Python scenarios in one locked `uv` workspace          |
+| `docs/product`      | Current PRD and scope                                           |
+| `docs/adr`          | Architecture decisions and their consequences                   |
+| `.github/workflows` | Reproducible CI without cloud deployment or model spending      |
+
+## Technical baseline
+
+- **Web:** Cloudflare Workers Paid, TanStack Start, React and TypeScript.
+- **Execution:** Rivet Cloud, Rivet 3 series. One owner for a case's execution lifecycle.
+- **Business records:** Postgres is the intended authority for quotes, approvals, orders and costs.
+  Database integration is an upcoming PoC task; the runtime probe is not the commercial ledger.
+- **Objects:** R2 with an application budget of **8,000,000,000 bytes**, shared across Occavoy's
+  managed environments. Uploads are disabled until durable quota accounting and reconciliation
+  are integrated. An R2 binding is not a native 8 GB account quota.
+- **Additional execution:** Restate self-hosted is reserved for a separately justified workflow.
+  Sandbox providers remain optional; see the [sandbox decision](docs/adr/0004-storage-and-sandbox-boundaries.md).
+- **Toolchain:** `mise.toml`, exact package versions, `pnpm-lock.yaml` and `uv.lock` are the
+  reproducible baseline. Versions were checked against official releases/registries on 27 November 2026.
+
+The initial UI uses synthetic experiences in Tokyo, London and Singapore. It makes no live
+inventory, pricing, supplier or booking claims. The global scope is reflected in the data
+contracts; supply coverage grows through actual partner access.
+
+## Working with a coding agent
+
+Read [AGENTS.md](AGENTS.md) and the assigned OCA issue before editing. The instructions are shared
+by human developers and any coding agent. `CLAUDE.md` and `GEMINI.md` point to the same source;
+no proprietary agent runtime is required.
+
+The [development guide](docs/development.md) covers MCP connections, project workflows,
+concurrent work, verification and handoffs. Use the same `mise` tasks in local editors,
+remote workspaces and CI. MCP is optional; credentials stay in each user's secret store.
+
+## Documentation and delivery
+
+- [PRD v0.2](docs/product/prd-v0.2.md)
+- [Architecture](docs/architecture.md)
+- [12-week milestones and measured workload](docs/roadmap.md)
+- [Development and agent workspace](docs/development.md)
+- [Historical project context in Eventsquare](https://chatgpt.com/space/page_6b05bcf5713081919f83e4123d0d20b0)
+
+Current requirements and architectural decisions belong in this repository. Linear is the
+execution record for ownership, dependencies, acceptance and actual results. Space retains the
+business discussion and earlier proposals. The earlier six-month plan is historical, and a
+Japan fixture must not be treated as a destination restriction.
+
+Before cloud deployment, configure the existing Cloudflare account and the Rivet Cloud
+organization/cluster, then follow their documented deployment steps. Bootstrap does not create
+cloud resources, publish the app, send partner messages or make bookings.
