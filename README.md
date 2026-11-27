@@ -63,16 +63,16 @@ after adding its dependencies. See [experiments](experiments/README.md).
 
 ## Workspace
 
-| Path                | Responsibility                                                  |
-| ------------------- | --------------------------------------------------------------- |
-| `apps/web`          | TanStack Start frontend and Cloudflare Workers request boundary |
+| Path                | Responsibility                                                         |
+| ------------------- | ---------------------------------------------------------------------- |
+| `apps/web`          | TanStack Start frontend and Cloudflare Workers request boundary        |
 | `apps/runtime`      | Service-case coordinator, bounded job adapter and qualification actors |
-| `packages/domain`   | Global destination, money, event, brief and approval contracts  |
-| `packages/storage`  | Postgres case/command/outbox store, usage and quota ledgers     |
-| `experiments/*`     | Isolated Python scenarios in one locked `uv` workspace          |
-| `docs/product`      | Current PRD and scope                                           |
-| `docs/adr`          | Architecture decisions and their consequences                   |
-| `.github/workflows` | Reproducible CI without cloud deployment or model spending      |
+| `packages/domain`   | Global destination, money, event, brief and approval contracts         |
+| `packages/storage`  | Postgres case/command/outbox store, usage and quota ledgers            |
+| `experiments/*`     | Isolated Python scenarios in one locked `uv` workspace                 |
+| `docs/product`      | Current PRD and scope                                                  |
+| `docs/adr`          | Architecture decisions and their consequences                          |
+| `.github/workflows` | Reproducible CI without cloud deployment or model spending             |
 
 ## Technical baseline
 

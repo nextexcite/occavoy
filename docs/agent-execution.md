@@ -12,13 +12,13 @@ The coding agent used to develop this repository is independent of the harness e
 
 ## Four lifetimes and one effect record
 
-| Object                | Identity               | Lives for                                                       | Authority and purpose                                                                     |
-| --------------------- | ---------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Customer relationship | relationship ID scoped by tenant; references customer | Many occasions and cases            | Postgres: preferences, consent, service history and follow-up eligibility; channel grants are a target, not an existing table |
-| Service case          | tenant + case          | An activated request through its documented outcome             | Postgres commercial state; one Rivet coordinator advances the permitted work; actor SQLite holds only a recoverable drain schedule receipt |
-| Conversation          | case + conversation    | A communication thread, possibly many turns                     | Saved messages and presentation; it is not approval or booking authority                  |
-| Agent job             | tenant + case + job    | One assigned reasoning objective, with a deadline and allowance | Pi Durable checkpoints inside a Rivet actor; result is bound to the input case revision   |
-| External action       | tenant + case + action | Dispatch intent through confirmed or unresolved outcome         | Postgres effect ledger plus provider evidence; a stable client reference, with the provider reference recorded only after confirmation |
+| Object                | Identity                                              | Lives for                                                       | Authority and purpose                                                                                                                      |
+| --------------------- | ----------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Customer relationship | relationship ID scoped by tenant; references customer | Many occasions and cases                                        | Postgres: preferences, consent, service history and follow-up eligibility; channel grants are a target, not an existing table              |
+| Service case          | tenant + case                                         | An activated request through its documented outcome             | Postgres commercial state; one Rivet coordinator advances the permitted work; actor SQLite holds only a recoverable drain schedule receipt |
+| Conversation          | case + conversation                                   | A communication thread, possibly many turns                     | Saved messages and presentation; it is not approval or booking authority                                                                   |
+| Agent job             | tenant + case + job                                   | One assigned reasoning objective, with a deadline and allowance | Pi Durable checkpoints inside a Rivet actor; result is bound to the input case revision                                                    |
+| External action       | tenant + case + action                                | Dispatch intent through confirmed or unresolved outcome         | Postgres effect ledger plus provider evidence; a stable client reference, with the provider reference recorded only after confirmation     |
 
 One customer may have two active cases. One case may need several agent jobs. A saved occasion does not start a paid background loop. A new customer message does not necessarily require a model: explicit cancel, approve, status and supplier callbacks are deterministic commands.
 
