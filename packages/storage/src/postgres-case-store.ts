@@ -295,7 +295,7 @@ export class PostgresCaseStore {
     const result = await this.pool.query(
       `SELECT ${EVENT_COLUMNS} FROM case_domain_events
        WHERE tenant_id = $1 AND case_id = $2 AND seq > $3
-       ORDER BY seq`,
+       ORDER BY case_domain_events.seq`,
       [tenantId, caseId, afterSeq ?? "0"],
     );
     return result.rows.map(eventRow);
@@ -826,7 +826,7 @@ export class PostgresCaseStore {
   async listOutboxForCase(tenantId: string, caseId: string): Promise<CaseOutboxRow[]> {
     const result = await this.pool.query(
       `SELECT ${OUTBOX_COLUMNS} FROM case_outbox
-       WHERE tenant_id = $1 AND case_id = $2 ORDER BY id`,
+       WHERE tenant_id = $1 AND case_id = $2 ORDER BY case_outbox.id`,
       [tenantId, caseId],
     );
     return result.rows.map(outboxRow);
@@ -840,7 +840,7 @@ export class PostgresCaseStore {
   ): Promise<string[]> {
     const result = await client.query(
       `SELECT id::text AS id FROM case_outbox
-       WHERE tenant_id = $1 AND case_id = $2 AND command_id = $3 ORDER BY id`,
+       WHERE tenant_id = $1 AND case_id = $2 AND command_id = $3 ORDER BY case_outbox.id`,
       [tenantId, caseId, commandId],
     );
     return result.rows.map((row) => row.id);

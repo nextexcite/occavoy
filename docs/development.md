@@ -15,6 +15,8 @@ pnpm dev
 pnpm dev:runtime
 ```
 
+Environment topology, fresh-machine setup, secrets split, and maintenance rules live in [environment.md](environment.md).
+
 The bootstrap task installs the TypeScript workspace and synchronizes the Python workspace. The root manifests are authoritative; do not create agent-specific copies of these commands.
 
 ## Implement one observable slice
