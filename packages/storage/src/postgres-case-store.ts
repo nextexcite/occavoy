@@ -510,6 +510,14 @@ export class PostgresCaseStore {
       if (cas.rowCount === 0) {
         throw new Error("concurrent_case_revision_conflict");
       }
+      if (next.phase === "closed") {
+        await client.query(
+          `UPDATE case_allowances
+           SET status = 'closed', pause_reason = NULL, updated_at = now()
+           WHERE tenant_id = $1 AND case_id = $2`,
+          [tenantId, row.caseId],
+        );
+      }
       await this.persistImmutableRecords(client, before, next, command);
       await client.query(
         `INSERT INTO case_domain_events
@@ -606,7 +614,14 @@ export class PostgresCaseStore {
       );
     }
     if (previousTask && currentTask !== previousTask) {
-      const status = command.kind === "agent_candidate" ? "completed" : "cancelled";
+      let status: string;
+      if (command.kind === "agent_task_stopped") {
+        if (command.reason === "deadline_exceeded") status = "expired";
+        else if (command.reason === "cancelled") status = "cancelled";
+        else status = "failed";
+      } else {
+        status = command.kind === "agent_candidate" ? "completed" : "cancelled";
+      }
       await client.query(
         `UPDATE case_agent_jobs SET status = $4, updated_at = now()
          WHERE tenant_id = $1 AND case_id = $2 AND task_id = $3`,
@@ -745,7 +760,7 @@ export class PostgresCaseStore {
    */
   async claimPendingOutbox(
     limit: number,
-    options?: { tenantId?: string; now?: Date; leaseTimeoutMs?: number },
+    options?: { tenantId?: string; caseId?: string; now?: Date; leaseTimeoutMs?: number },
   ): Promise<CaseOutboxRow[]> {
     const now = options?.now ?? new Date();
     const leaseTimeoutMs = options?.leaseTimeoutMs ?? DEFAULT_OUTBOX_LEASE_MS;
@@ -760,12 +775,13 @@ export class PostgresCaseStore {
            OR (status = 'dispatched' AND dispatched_at <= $4)
          )
          AND ($2::text IS NULL OR tenant_id = $2)
+         AND ($5::text IS NULL OR case_id = $5)
          ORDER BY COALESCE(dispatched_at, available_at), id
          LIMIT $1
          FOR UPDATE SKIP LOCKED
        )
        RETURNING ${OUTBOX_COLUMNS}`,
-      [limit, options?.tenantId ?? null, now, staleBefore],
+      [limit, options?.tenantId ?? null, now, staleBefore, options?.caseId ?? null],
     );
     return result.rows.map(outboxRow);
   }
@@ -776,6 +792,7 @@ export class PostgresCaseStore {
    */
   async reclaimStaleOutbox(options?: {
     tenantId?: string;
+    caseId?: string;
     now?: Date;
     leaseTimeoutMs?: number;
   }): Promise<CaseOutboxRow[]> {
@@ -789,10 +806,11 @@ export class PostgresCaseStore {
          SELECT id FROM case_outbox
          WHERE status = 'dispatched' AND dispatched_at <= $3
            AND ($1::text IS NULL OR tenant_id = $1)
+           AND ($4::text IS NULL OR case_id = $4)
          FOR UPDATE SKIP LOCKED
        )
        RETURNING ${OUTBOX_COLUMNS}`,
-      [options?.tenantId ?? null, now, staleBefore],
+      [options?.tenantId ?? null, now, staleBefore, options?.caseId ?? null],
     );
     return result.rows.map(outboxRow);
   }
