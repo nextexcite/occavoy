@@ -20,6 +20,7 @@
     "check:python": "uv run ruff check experiments scripts && uv run ruff format --check experiments scripts && uv run --package occavoy-evals pytest experiments/evals/tests",
     "verify:runtime": "pnpm --filter @occavoy/runtime verify:restart",
     "verify:harness": "pnpm --filter @occavoy/runtime verify:harness",
+    "verify:case-recovery": "pnpm --filter @occavoy/runtime verify:case-recovery",
     "demo:lifecycle": "node --import tsx scripts/demo-case-lifecycle.ts",
     "deploy:web": "pnpm --filter @occavoy/web deploy",
     "experiment:new": "uv run python scripts/new_experiment.py"

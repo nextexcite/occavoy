@@ -15,7 +15,8 @@
     "test": "pnpm build && node --import tsx --test test/*.test.mjs",
     "verify:live": "node test/verify-live.mjs",
     "verify:restart": "pnpm build && node test/verify-restart.mjs",
-    "verify:harness": "pnpm build && node test/verify-harness.mjs"
+    "verify:harness": "pnpm build && node test/verify-harness.mjs",
+    "verify:case-recovery": "pnpm build && node --import tsx --test test/verify-case-recovery.mjs"
   },
   "dependencies": {
     "@earendil-works/chord": "1.5.2",

@@ -19,7 +19,7 @@ Evidence frozen at merge commit `6112523`: [passing CI](https://github.com/nexte
 
 Use actual test output and the issue record for the latest verification result. Do not change an issue to Done merely because an interface or fixture exists.
 
-**Since that baseline:** the [first local OCA-34 trace](local-case-trace.md) connects HTTP activation to Postgres, a bounded scripted job, a synthetic hotel quote, exact approval, reconciliation and closure. It records which steps cross HTTP and which are fixture calls. The deployed route, operator screens, Pi integration on this path and cloud proof remain open.
+**Since that baseline:** the [first local OCA-34 trace](local-case-trace.md) connects HTTP activation to Postgres, a scripted job, a synthetic hotel quote, exact approval, reconciliation and closure. The [Pi recovery follow-up](local-case-trace.md#local-pi-recovery-http-activation-to-rfq) runs an HTTP-activated case through a real Pi Durable job, kills the local runtime during its read, and resumes the same submission through one committed RFQ intent. The deployed route, production Pi invoker, operator screens and cloud proof remain open.
 
 ## First integrated scenario
 

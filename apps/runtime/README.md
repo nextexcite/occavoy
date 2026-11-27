@@ -20,6 +20,8 @@ The runtime build typechecks and then bundles the runtime with first-party works
 
 ## Durable reasoning probe
 
+For a case-backed recovery test rather than the standalone probe, run `mise exec -- pnpm verify:case-recovery` with the disposable Compose Postgres on port 54329. See the [HTTP activation to RFQ trace](../../docs/local-case-trace.md#local-pi-recovery-http-activation-to-rfq) for the process fault, measured usage and evidence boundaries.
+
 The selected compatible combination is `@rivet-dev/pi` **0.5.7**, `@earendil-works/{chord,pi-ai,pi-durable,pi-schema,pi-telemetry}` **1.5.2**, and `rivetkit` **3.1.1**. Pi 1.6.1 is newer but falls outside this adapter's `~1.5.0` peer range. The adapter accepts Rivet 3.x. Pi Durable remains experimental; these exact pins are a tested combination, not a claim of a stable future API. See the [published adapter manifest](https://registry.npmjs.org/@rivet-dev%2fpi/0.5.7) and [official integration guide](https://rivet.dev/ecosystem/pi-durable/).
 
 Run the qualification without a model key or a separately running server:

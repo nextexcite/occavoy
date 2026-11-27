@@ -462,6 +462,7 @@ export interface CreateServiceCaseActorOptions {
   piJobInvoker?: PiJobInvoker;
   cancelAgentTask?: ServiceCaseCoordinatorDeps["cancelAgentTask"];
   requestSupplierQuote?: ServiceCaseCoordinatorDeps["requestSupplierQuote"];
+  staleDispatchMs?: ServiceCaseCoordinatorDeps["staleDispatchMs"];
 }
 
 function authorize(expected: string, supplied: unknown): void {
@@ -566,6 +567,9 @@ export function createServiceCaseActor(
       ...(options.cancelAgentTask ? { cancelAgentTask: options.cancelAgentTask } : {}),
       ...(options.requestSupplierQuote
         ? { requestSupplierQuote: options.requestSupplierQuote }
+        : {}),
+      ...(options.staleDispatchMs !== undefined
+        ? { staleDispatchMs: options.staleDispatchMs }
         : {}),
     });
     coordinators.set(key, created);
