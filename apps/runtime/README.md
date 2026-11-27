@@ -141,6 +141,8 @@ On wake, pending SQLite commands are notified again. Duplicate pending submissio
 
 Cloud mode uses `runtime:"native"`, `startEngine:false`, and `startServices:false`. Rivet Cloud provides its own control plane and injects `RIVET_ENDPOINT`, `RIVET_TOKEN` and `RIVET_POOL`; do not override those variables on a hosted node. Set `OCCAVOY_RUNTIME_DEMO_TOKEN` as a private cluster secret. The Dockerfile sets `OCCAVOY_RUNTIME_MODE=cloud`, and production refuses an implicit local mode.
 
+The production image omits the local engine CLI and development services; use the workspace for local engine runs. In cloud mode the runtime serves Prometheus metrics at `http://127.0.0.1:9464/metrics` inside the container. Set `RIVETKIT_METRICS_PORT` only if a different port is needed. Keep it distinct from `PORT` and other listeners; a bind collision stops startup. Scraping from inside the container does not prove that a hosted collector can reach it.
+
 After a cluster and Docker access have been explicitly set up, the documented deployment path from the repository root is:
 
 ```sh

@@ -44,6 +44,8 @@ contract test rejects differences in either direction.
 The runtime `dev` and `test` scripts preload it automatically, as does the vitest setup.
 Workers and browser code never auto-load it.
 
+The [runtime metrics listener](../apps/runtime/README.md#rivet-cloud-hosted-node) is cloud-only. Its optional `RIVETKIT_METRICS_PORT` setting is not part of the local profile and is ignored in local mode.
+
 ## One-off commands: `pnpm local:exec`
 
 ```sh

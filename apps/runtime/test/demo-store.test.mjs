@@ -171,3 +171,17 @@ test("production cannot silently launch a local engine or accept a default token
     "cloud",
   );
 });
+
+test("only cloud mode consumes the metrics port setting", () => {
+  const settings = { OCCAVOY_RUNTIME_DEMO_TOKEN: randomBytes(24).toString("hex") };
+  const cloud = { ...settings, OCCAVOY_RUNTIME_MODE: "cloud" };
+  assert.equal(readRuntimeConfig({ ...settings, RIVETKIT_METRICS_PORT: "unused" }).mode, "local");
+  assert.equal(readRuntimeConfig(cloud).metricsPort, 9464);
+  assert.equal(readRuntimeConfig({ ...cloud, RIVETKIT_METRICS_PORT: "9475" }).metricsPort, 9475);
+  for (const value of ["unused", "0", "65536"]) {
+    assert.throws(
+      () => readRuntimeConfig({ ...cloud, RIVETKIT_METRICS_PORT: value }),
+      /RIVETKIT_METRICS_PORT/,
+    );
+  }
+});

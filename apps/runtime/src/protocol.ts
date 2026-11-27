@@ -52,7 +52,7 @@ export function readRuntimeConfig(env: NodeJS.ProcessEnv) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("PORT must be an integer from 1 to 65535.");
   }
-  const metricsPort = Number(env.RIVETKIT_METRICS_PORT ?? "9464");
+  const metricsPort = mode === "cloud" ? Number(env.RIVETKIT_METRICS_PORT ?? "9464") : 9464;
   if (!Number.isInteger(metricsPort) || metricsPort < 1 || metricsPort > 65535) {
     throw new Error("RIVETKIT_METRICS_PORT must be an integer from 1 to 65535.");
   }
