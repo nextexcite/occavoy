@@ -633,6 +633,12 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
     // Simulated restart: a fresh store instance observes the stranded claim.
     const freshStore = new PostgresCaseStore(pool);
     const t0 = new Date("2027-01-01T00:00:00Z");
+    // Keep eligibility and lease expiry on the same simulated clock.
+    const seeded = await pool.query(
+      `UPDATE case_outbox SET available_at = $3 WHERE tenant_id = $1 AND case_id = $2`,
+      [tenantId, harness.caseId, t0],
+    );
+    expect(seeded.rowCount).toBe(1);
     const claimed = await freshStore.claimPendingOutbox(10, { tenantId, now: t0 });
     const mine = claimed.filter(
       (row) => row.tenantId === tenantId && row.caseId === harness.caseId,
