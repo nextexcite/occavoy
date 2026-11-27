@@ -327,6 +327,34 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
     expect(check.rowCount).toBe(0);
   });
 
+  it("serializes concurrent first-time initialization in the same schema", async () => {
+    const schema = `mig_race_${randomUUID().replaceAll("-", "")}`;
+    const poolA = new pg.Pool({
+      connectionString: DATABASE_URL,
+      options: `-c search_path=${schema}`,
+    });
+    const poolB = new pg.Pool({
+      connectionString: DATABASE_URL,
+      options: `-c search_path=${schema}`,
+    });
+    try {
+      await pool.query(`CREATE SCHEMA ${schema}`);
+      const [appliedA, appliedB] = await Promise.all([
+        applyMigrations(poolA),
+        applyMigrations(poolB),
+      ]);
+      expect([...appliedA, ...appliedB].sort()).toEqual(["001_quota", "002_case_core"]);
+      const recorded = await pool.query(
+        `SELECT version FROM ${schema}.schema_migrations ORDER BY version`,
+      );
+      expect(recorded.rows.map((row) => row.version)).toEqual(["001_quota", "002_case_core"]);
+    } finally {
+      await poolA.end();
+      await poolB.end();
+      await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    }
+  });
+
   it.each([
     ["London", "GBP"],
     ["Tokyo", "JPY"],
