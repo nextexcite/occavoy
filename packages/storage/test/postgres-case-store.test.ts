@@ -330,6 +330,7 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
         "001_quota",
         "002_case_core",
         "003_attempt_fences",
+        "003_quota_reconciliation",
         "004_usage_allowances",
         "005_case_job_request_scope",
         "006_agent_intervention",
