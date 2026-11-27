@@ -1,0 +1,26 @@
+#:schema https://fnox.jdx.dev/schema.json
+
+# Value-free secret mapping for Occavoy. Values live in Doppler (canonical) and
+# are managed there — never in this file. See docs/environment.md for the
+# secrets doctrine, identity roles, and refresh procedure.
+
+# Project cloud-development recipient (public key only). The matching private
+# key is delivered per machine or sandbox through the environment and is never
+# committed. Encrypted entries may be added for the portable-development lane;
+# decryption uses FNOX_AGE_KEY / FNOX_AGE_KEY_FILE at consumption time.
+[providers.age]
+type = "age"
+recipients = ["age1jhm8umtc6ls05pk2w8sca97932zcal0p8sg6w7nhyjxw28gkfs2sujgl3x"]
+
+# `local` is the only Doppler config the project currently operates. Add dev,
+# staging, or production profiles only when the project genuinely operates
+# them — see docs/environment.md.
+[profiles.local.providers.doppler]
+type = "doppler"
+project = "occavoy"
+config = "local"
+
+[profiles.local.secrets]
+DATABASE_URL = { provider = "doppler", value = "DATABASE_URL", if_missing = "error" }
+OCCAVOY_RUNTIME_MODE = { provider = "doppler", value = "OCCAVOY_RUNTIME_MODE", if_missing = "error" }
+OCCAVOY_RUNTIME_DEMO_TOKEN = { provider = "doppler", value = "OCCAVOY_RUNTIME_DEMO_TOKEN", if_missing = "error" }

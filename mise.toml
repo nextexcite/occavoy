@@ -5,6 +5,7 @@ node = "26.13.1"
 pnpm = "12.23.0"
 python = "3.15.2"
 uv = "0.13.10"
+fnox = "1.50.0"
 
 [env]
 UV_PYTHON = "3.15.2"
@@ -25,6 +26,10 @@ run = "pnpm dev:runtime"
 [tasks.check]
 description = "Run the same checks as CI"
 run = ["pnpm check", "pnpm check:python"]
+
+[tasks."secrets:refresh"]
+description = "Materialize .env.local from the fnox local profile (atomic, mode 0600)"
+run = "python scripts/fnox_refresh.py --profile local --output .env.local"
 
 [tasks.experiment]
 description = "Create a uv workspace experiment: mise run experiment -- slug"
