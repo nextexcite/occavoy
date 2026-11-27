@@ -1,8 +1,62 @@
-# Occavoy runtime qualification fixture
+# Occavoy runtime qualification fixtures
 
-This package is a small, real Rivet 3.1.1 actor/workflow integration. It stores a synthetic case and accepted commands in actor SQLite, waits durably for client input, supports pause/resume, and prevents duplicate commands from applying twice.
+This package contains two real Rivet 3.1.1 integrations with synthetic data:
 
-It does **not** book, charge, call a model, contact a supplier, or create a sandbox. Actor-local demonstration state is not the production ServiceCase authority: production business records remain in Postgres. Use synthetic text only. The shared demo token is a test boundary, not tenant authentication.
+- **`demoCase`** is the earlier command/workflow probe. It waits for client input, supports pause/resume, and prevents duplicate commands from applying twice. Its native queue API is deprecated and remains an isolated compatibility fixture.
+- **`reasoningProbe`** uses the official `@rivet-dev/pi` adapter and Pi Durable inside an Actor. Its scripted model provider drives the actual model/tool loop and persisted tool tasks. It proves harness invocation and recovery without purchasing model calls.
+
+Neither fixture books, charges, contacts a supplier, or creates a sandbox. Actor-local demonstration records are not the production ServiceCase authority: commercial records remain intended for Postgres. Use synthetic text only. The test credentials are not production tenant authentication.
+
+## Durable reasoning probe
+
+The selected compatible combination is `@rivet-dev/pi` **0.5.7**, `@earendil-works/{chord,pi-ai,pi-durable,pi-schema,pi-telemetry}` **1.5.2**, and `rivetkit` **3.1.1**. Pi 1.6.1 is newer but falls outside this adapter's `~1.5.0` peer range. The adapter accepts Rivet 3.x. Pi Durable remains experimental; these exact pins are a tested combination, not a claim of a stable future API. See the [published adapter manifest](https://registry.npmjs.org/@rivet-dev%2fpi/0.5.7) and [official integration guide](https://rivet.dev/ecosystem/pi-durable/).
+
+Run the qualification without a model key or a separately running server:
+
+```sh
+mise exec -- pnpm --filter @occavoy/runtime verify:harness
+```
+
+The test runs local native Rivet, Pi Durable, and Pi's in-process faux provider. The provider emits tool calls; Pi validates and executes them, persists their outcomes, and requests the next model response. A signed admission fixes one job, its case revision, scenario, and deadline. The actor key is `[tenant, case, job]`. There are exactly two registered tools: a synthetic case read and a synthetic structured-result receipt. No built-in file, shell, browser, or commerce tools are installed.
+
+This is the backend invocation path against a running local server:
+
+```ts
+import { createClient } from "rivetkit/client";
+import { createProbeCredential } from "./src/probe-protocol.js";
+import type { RuntimeRegistry } from "./src/registry.js";
+
+const key = ["demo-tenant", "global-case", "job-1"];
+const secret = process.env.OCCAVOY_RUNTIME_DEMO_TOKEN!;
+const client = createClient<RuntimeRegistry>("http://localhost:6420");
+const task = client.reasoningProbe.getOrCreate(key, {
+  params: { credential: createProbeCredential(secret, key) },
+});
+const admitted = await task.admit({
+  requestId: "command-1",
+  baseRevision: 7,
+  scenario: "summary",
+});
+const { submissionId } = await task.submit(admitted.prompt, {
+  requestId: admitted.requestId,
+});
+const progress = await task.submission.status(submissionId);
+// A short-lived test/client may also wait; the web request need not stay open.
+const outcome = await task.submission.wait(submissionId);
+const recorded = await task.probeStatus();
+```
+
+`submit` acknowledges a persisted submission. `done` and `unanswered` are distinct outcomes; a fulfilled RPC is not evidence of a successful model run. Retrying the same request ID returns the same submission. `admit` rejects a changed payload or case revision for the same job. The production coordinator must derive the job and request identity from its durable command; this fixture's two client calls do not implement a production outbox dispatcher.
+
+Model routing is bound internally to the actual Actor ID, independently of prompt content. Credentials are bound to the three-part Actor key. A valid prompt from Actor A cannot charge A's budget while executing in B. Client model switching has an empty allowlist; the host sets the fixture model. This demonstrates these specific boundaries, not a production login, authorization service, or permission review of every generic Pi RPC. Production clients should use the application API rather than a general harness administration interface.
+
+The durable fixture allowance is **4 model attempts**, **4 tool executions including replays**, **3 tool rounds per run**, and **60 seconds per admitted job**. The deadline scenario uses one second to exercise expiry. Provider admission commits the model-attempt reservation before producing a response; tool entry commits its reservation before work. Limits persist across separate submissions and process replacement. Ordinary Pi hook exceptions can be reported and swallowed, so they are not the enforcement boundary. Output is synthetic and capped at 4,096 bytes; the provider rejects prompt input over 2,048 bytes. These checks do not implement monetary reservations or a general transcript-storage quota.
+
+**Observed on 2026-11-27:** `verify:harness` passed on Node 26.13.1. It verified the real tool round trip, duplicate-request deduplication, changed-admission rejection, key/foreign-prompt/model-selection isolation, the model allowance, tool-round limit, deadline, and two SIGKILL recovery boundaries. For a `replay:"safe"` read, the interrupted tool runs again while the saved model decision is reused. For the `replay:"unsafe"` result tool, the test kills the process after its synthetic receipt commits but before its result returns: the tool is not replayed and the transcript records an interrupted outcome. This is not an exactly-once claim about an external supplier or payment.
+
+The crash test kills the owned runtime and its local engine, reopens their local data, and uses read-only status polling to observe recovery. It has no paid model calls and no external effects. It does not establish cloud recovery, disk-loss recovery, model quality, model pricing, or production transaction correctness. Connecting the probe's `baseRevision` to the domain's case/brief versions, authoritative result acceptance, PostgreSQL persistence, real model access, and provider reconciliation remains separate work.
+
+A long-lived ServiceCase coordinator and a bounded AgentTask are separate responsibilities. The intended task key is `[tenant, case, job]`; a customer relationship can outlive many cases and is not one indefinitely running model loop. Pi stores task-internal reasoning progress in the Actor database. It does not replace the commercial ledger or customer-relationship records.
 
 ## Local development
 
@@ -27,11 +81,12 @@ mise exec -- pnpm --filter @occavoy/runtime typecheck
 mise exec -- pnpm --filter @occavoy/runtime test
 mise exec -- pnpm --filter @occavoy/runtime verify:live
 mise exec -- pnpm --filter @occavoy/runtime verify:restart
+mise exec -- pnpm --filter @occavoy/runtime verify:harness
 ```
 
 The automated SQLite tests cover accepted-command persistence after reopening a database, transactional rollback at the state/result boundary, duplicate/conflicting input, concurrent duplicate receipts, pause/resume, and fail-closed production configuration. They do not substitute for the real Rivet integration check. `verify:restart` starts a local native runtime, prepares a paused case, replaces its process using SIGTERM, and resumes the same case. It generates an in-memory credential and temporary checkpoint, and requires no separately running development server. This proves neither abrupt-failure recovery nor Cloud operation.
 
-Observed on **2026-11-27** with Node **26.13.1**, TypeScript **7.0.2** and RivetKit **3.1.1**: typecheck/build passed, all **5 SQLite tests** passed, and the real local `verify:restart` check passed. The recovered case retained its paused revision before continuing; duplicate application, conflicting command rejection and failed authentication were also checked. Docker image construction and Rivet Cloud deployment have **not** been tested in this bootstrap. SIGKILL, machine loss, provider side effects, tenant isolation and backup restoration remain separate qualification work.
+Observed on **2026-11-27** with Node **26.13.1**, TypeScript **7.0.2** and RivetKit **3.1.1**: typecheck/build passed, all **5 SQLite tests** passed, and the real local `verify:restart` check passed. The recovered `demoCase` retained its paused revision before continuing; duplicate application, conflicting command rejection and failed authentication were also checked. This legacy fixture checks SIGTERM replacement. The separate reasoning probe's SIGKILL evidence is described above. Docker image construction, Rivet Cloud deployment, machine loss, real provider side effects, production tenant isolation and backup restoration remain unverified.
 
 With the runtime running, `verify:live` exercises the real actor, workflow wait, pause/resume, duplicate handling and unauthorized access. Its default mode does not claim a restart occurred. To check recovery across a runtime restart:
 
@@ -43,7 +98,7 @@ mise exec -- pnpm --filter @occavoy/runtime verify:live --resume
 
 The checkpoint contains only a synthetic actor key and expected revision; no token. Run both commands from the same directory. By default verification permits only a local endpoint. Testing a remote isolated demo namespace additionally requires `OCCAVOY_VERIFY_REMOTE=1` and `OCCAVOY_RUNTIME_VERIFY_ENDPOINT`; this does not authorize deploying anything.
 
-## Client API
+## Legacy command probe client API
 
 The SDK API below is from the pinned 3.1.1 package. Keep this backend-only because it carries the demo credential.
 

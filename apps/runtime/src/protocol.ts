@@ -52,5 +52,12 @@ export function readRuntimeConfig(env: NodeJS.ProcessEnv) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("PORT must be an integer from 1 to 65535.");
   }
-  return { mode, demoToken, port } as const;
+  const probeHold = env.OCCAVOY_PROBE_HOLD;
+  if (
+    probeHold !== undefined &&
+    (env.NODE_ENV !== "test" || mode !== "local" || !["safe", "unsafe"].includes(probeHold))
+  ) {
+    throw new Error("OCCAVOY_PROBE_HOLD is only a local test fault injection.");
+  }
+  return { mode, demoToken, port, probeHold: probeHold as "safe" | "unsafe" | undefined } as const;
 }

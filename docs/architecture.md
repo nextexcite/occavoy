@@ -1,17 +1,17 @@
 # Architecture baseline
 
-Status: selected boundaries with implementation and cloud proof tracked separately. See the [ADRs](README.md) and [release gates](roadmap.md).
+Status: selected boundaries with implementation and cloud proof tracked separately. The [customer lifecycle and agent execution](agent-execution.md) document defines invocation, ownership and recovery. The [implementation handoff](implementation-handoff.md) distinguishes executable fixtures from the next integration work. See the [ADRs](README.md) and [release gates](roadmap.md).
 
 ## Runtime topology
 
-| Component           | Responsibility                                                                            | Initial deployment direction                                         |
-| ------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `apps/web`          | TanStack Start interface, authenticated request boundary, progress and operator views     | Cloudflare Workers Paid                                              |
-| `apps/runtime`      | Case commands, waiting, resumption, bounded tool execution, reconciliation scheduling     | Rivet Cloud Actor Nodes                                              |
-| `packages/domain`   | Portable contracts and deterministic business rules                                       | Shared TypeScript package                                            |
-| `packages/storage`  | Business records, transaction boundaries, storage reservations and persistence interfaces | Postgres-backed implementation; adapters are qualified independently |
-| `experiments/evals` | Reproducible fixtures, scenario evaluation, and measurement utilities                     | Python through the `uv` workspace                                    |
-| R2                  | Bounded evidence and generated artifacts                                                  | Private objects behind an application upload policy                  |
+| Component           | Responsibility                                                                                     | Initial deployment direction                                         |
+| ------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `apps/web`          | TanStack Start interface, authenticated request boundary, progress and operator views              | Cloudflare Workers Paid                                              |
+| `apps/runtime`      | Separate case coordinator and scoped Pi Durable agent jobs; waiting, resumption and reconciliation | Rivet Cloud Actor Nodes                                              |
+| `packages/domain`   | Portable contracts and deterministic business rules                                                | Shared TypeScript package                                            |
+| `packages/storage`  | Business records, transaction boundaries, storage reservations and persistence interfaces          | Postgres-backed implementation; adapters are qualified independently |
+| `experiments/evals` | Reproducible fixtures, scenario evaluation, and measurement utilities                              | Python through the `uv` workspace                                    |
+| R2                  | Bounded evidence and generated artifacts                                                           | Private objects behind an application upload policy                  |
 
 The directory boundaries do not require separate deployed microservices. Use one web deployment and one Rivet application first. Add operational components only when a measured responsibility requires them.
 
@@ -23,12 +23,14 @@ flowchart TD
     D --> R["Rivet Cloud case execution"]
     R --> P
     R --> S["Manual and API supply adapters"]
-    R --> T["Bounded model and tool adapters"]
+    R --> J["Scoped agent-job actor"]
+    J --> T["Pi Durable and allowed domain tools"]
+    J --> P
     W --> B["Reserved R2 storage"]
     R --> B
 ```
 
-Rivet Cloud remains the single case-lifecycle owner. A scheduled dispatcher may run as a bounded scheduled job, but it does not create another durable case workflow. The web request returns after durable command acceptance rather than waiting for a supplier reply.
+Rivet hosts both case execution and agent-job execution. The case coordinator owns permitted business progression; Pi Durable owns the model/tool checkpoints of a particular job. Postgres remains the commercial authority. A scheduled dispatcher may run as a bounded scheduled job, but it does not create another owner of the case. The web request returns after durable command acceptance rather than waiting for a supplier reply.
 
 ## Seven logical responsibilities
 
@@ -44,7 +46,7 @@ These are module responsibilities. Do not create seven deployable services to ma
 
 ## Record ownership
 
-Postgres is the intended business authority. Rivet holds execution state, durable command reception, and workflow progress. R2 stores selected evidence bytes referenced by records. A development memory adapter or fixture is not a production persistence claim.
+Postgres is the intended business authority. Case actors hold recoverable receipt/drain state and execution references; Pi actors hold scoped conversations, submissions and model/tool checkpoints in actor SQLite. R2 stores selected evidence bytes referenced by records. A development memory adapter or fixture is not a production persistence claim.
 
 | Records                                  | Required invariant                                                                        |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -84,7 +86,9 @@ The fixture location does not set application defaults, tenant permissions, supp
 
 ## Model and tool boundary
 
-Models may clarify intent, extract information, rank feasible candidates, and explain choices. Code enforces dates, amounts, eligibility, authorization, version transitions, and resource limits. Tool adapters require structured inputs, explicit destination/host scope, deadlines, and an execution allowance. Source pages and supplier text are untrusted data, not instructions to change privileges.
+Models may clarify intent, extract information, rank feasible candidates, and explain choices. The initial implementation candidate uses Pi Durable through the official Rivet adapter; see [ADR 0005](adr/0005-agent-harness.md). A job uses a stable `[tenantId, caseId, jobId]` key and submission request ID. Code enforces dates, amounts, eligibility, authorization, version transitions, and resource limits. Tool adapters require structured inputs, explicit destination/host scope, deadlines, and an execution allowance. Source pages and supplier text are untrusted data, not instructions to change privileges.
+
+The customer relationship outlives individual cases. A conversation is a communication surface, an agent job is a bounded reasoning activity, and an external action has its own intent/receipt/unknown record. Do not collapse these into a single infinitely running customer agent. Waiting for a supplier or approval stores a deadline and waiting reason; it does not leave a model call open.
 
 Use no general-purpose code sandbox for work that a bounded HTTP or deterministic adapter can perform. If a sandbox is justified, its lifecycle is a tool execution owned by the case, not another case owner. See [ADR 0004](adr/0004-storage-and-sandbox-boundaries.md).
 

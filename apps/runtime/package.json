@@ -13,9 +13,16 @@
     "start": "node dist/server.js",
     "test": "pnpm build && node --test test/*.test.mjs",
     "verify:live": "node test/verify-live.mjs",
-    "verify:restart": "pnpm build && node test/verify-restart.mjs"
+    "verify:restart": "pnpm build && node test/verify-restart.mjs",
+    "verify:harness": "pnpm build && node test/verify-harness.mjs"
   },
   "dependencies": {
+    "@earendil-works/chord": "1.5.2",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/pi-schema": "1.5.2",
+    "@earendil-works/pi-telemetry": "1.5.2",
+    "@rivet-dev/pi": "0.5.7",
     "rivetkit": "3.1.1"
   },
   "engines": {

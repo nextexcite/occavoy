@@ -2,16 +2,19 @@
 
 The current product baseline is **v0.2**: Hong Kong customers, global destinations, a partner-facing demonstration within one month, an assisted usable product within one to two months, and a bounded commercial experiment within twelve weeks.
 
-| Document                                                            | Use it to answer                                                    |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| [Product requirements](product/prd-v0.2.md)                         | What must the first usable service do?                              |
-| [Architecture](architecture.md)                                     | Which component owns each record, action, and failure?              |
-| [Twelve-week roadmap](roadmap.md)                                   | What evidence allows the next stage to begin?                       |
-| [Development workflow](development.md)                              | How do people and coding agents work together?                      |
-| [Stack and runtime ADR](adr/0001-stack-and-runtime.md)              | Why Cloudflare at the edge and Rivet Cloud for execution?           |
-| [Records and effects ADR](adr/0002-business-truth-and-effects.md)   | How do commands, approvals, and external results remain consistent? |
-| [Global contracts ADR](adr/0003-global-destination-contracts.md)    | How do global destinations work without destination-specific code?  |
-| [Storage and tools ADR](adr/0004-storage-and-sandbox-boundaries.md) | How do the storage cap and optional sandboxes work?                 |
+| Document                                                            | Use it to answer                                                          |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [Product requirements](product/prd-v0.2.md)                         | What must the first usable service do?                                    |
+| [Architecture](architecture.md)                                     | Which component owns each record, action, and failure?                    |
+| [Customer lifecycle and agent execution](agent-execution.md)        | How does a customer case invoke a harness, wait and recover?              |
+| [Engineering handoff](implementation-handoff.md)                    | What exists now, and what exact integrated slice should be built next?    |
+| [Harness decision](adr/0005-agent-harness.md)                       | Why qualify Pi Durable on Rivet, and when reconsider Eve, fx or plain Pi? |
+| [Twelve-week roadmap](roadmap.md)                                   | What evidence allows the next stage to begin?                             |
+| [Development workflow](development.md)                              | How do people and coding agents work together?                            |
+| [Stack and runtime ADR](adr/0001-stack-and-runtime.md)              | Why Cloudflare at the edge and Rivet Cloud for execution?                 |
+| [Records and effects ADR](adr/0002-business-truth-and-effects.md)   | How do commands, approvals, and external results remain consistent?       |
+| [Global contracts ADR](adr/0003-global-destination-contracts.md)    | How do global destinations work without destination-specific code?        |
+| [Storage and tools ADR](adr/0004-storage-and-sandbox-boundaries.md) | How do the storage cap and optional sandboxes work?                       |
 
 ## Evidence levels
 

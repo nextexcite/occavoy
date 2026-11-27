@@ -4,16 +4,19 @@ These instructions apply to human contributors and coding agents throughout this
 
 ## Start here
 
-1. Read the root README, [PRD](docs/product/prd-v0.2.md), [architecture](docs/architecture.md), and the issue being worked on.
+1. Read the root README, [PRD](docs/product/prd-v0.2.md), [architecture](docs/architecture.md), [execution model](docs/agent-execution.md), [handoff](docs/implementation-handoff.md), and the issue being worked on.
 2. Check `git status` and identify the branch, worktree, files owned by the task, and any work already in progress.
 3. Pick the smallest change that proves the issue's acceptance criteria. Record an architectural change in `docs/adr/` before relying on it.
 
 ## Product and architecture boundaries
 
 - The initial customer audience is Hong Kong consumers and their channel partners. Destinations are global from the first version. Japan is one demonstration fixture, never a product-wide restriction.
-- Rivet Cloud owns the service-case execution lifecycle. Cloudflare Workers Paid with TanStack Start owns the web and request boundary. Keep long-running execution outside web requests.
+- Rivet Cloud hosts execution. One deterministic service-case coordinator advances each case; a separate scoped Pi Durable actor owns each bounded reasoning job. These are compatible durability scopes, not competing authorities. Cloudflare Workers Paid with TanStack Start owns the web and request boundary.
 - Postgres is the intended authority for commercial records. Actor checkpoints and chat transcripts are not independent authorities for quotes, approvals, orders, or payments.
 - Restate is not a default dependency. A separately owned, self-hosted use requires a demonstrated need and an ADR. Never give two engines ownership of the same case lifecycle.
+- The production harness candidate is `@rivet-dev/pi` with its exact compatible Pi Durable dependencies. See ADR 0005. Do not invoke a developer CLI per customer request or expose developer tools to customer jobs. Do not upgrade the Pi family independently of adapter compatibility.
+- Agent results are candidates bound to tenant, case, job and input revision. Deterministic code and a database transaction decide whether they may change business state. Retry a submission with its original request ID; do not convert a timeout into a new job or purchase.
+- The legacy `demoCase` restart fixture is not a service-case implementation. Follow the handoff's supported action/inbox design; do not copy deprecated queue APIs into new production modules.
 - Sandbox execution is optional. Evaluate Docker `sbx` first when isolation is needed; keep it disabled until its capabilities are proven. E2B or bounded Lambda tool execution are explicit fallback candidates.
 - Enforce the R2 application storage budget of `8_000_000_000` bytes through atomic reservations and reconciliation. This is not a native R2 account quota or a promise that all cloud usage is free.
 - A saved event does not authorize open-ended execution. A customer approval binds a specific proposal version, amount, currency, scope, and expiry.
@@ -36,6 +39,8 @@ uv run --package occavoy-evals pytest experiments/evals/tests
 The root manifests define the commands. If a command and these instructions diverge, fix the discrepancy within the assigned scope or report it. Dependency changes require exact versions, updated lockfiles, a reason, and the relevant compatibility check.
 
 MCP servers are optional interfaces. Use approved connectors, CLIs, SDKs, or ordinary repository tools according to availability. Do not make local development depend on a particular coding-agent vendor or a collection of installed MCP servers. See [development guidance](docs/development.md).
+
+Keep this file as the common instruction entry point. Do not regenerate `CLAUDE.md` or `GEMINI.md` bridge files.
 
 ## Concurrent work
 

@@ -1,6 +1,6 @@
 # Shared development workflow
 
-This repository supports human developers and different coding agents. The root [AGENTS.md](../AGENTS.md) is the common instruction entry point; `CLAUDE.md` and `GEMINI.md` only point to it. Repository tools, contracts, and evidence remain the same whichever assistant is used.
+This repository supports human developers and different coding agents. The root [AGENTS.md](../AGENTS.md) is the common instruction entry point. Repository tools, contracts, and evidence remain the same whichever assistant is used.
 
 ## Start a task
 

@@ -12,7 +12,7 @@ Targets are measured from the initial development baseline. Dates are planning c
 | 2027-01-22, week 8  | Assisted usable service                  | Authorized real supply and confirmation route, identified transaction/fulfillment roles, consent and access control, operator handling, restore exercise, and measured delivery effort |
 | 2027-02-19, week 12 | Bounded commercial experiment and review | Real service outcomes, fee evidence or reasons for refusal, channel attribution, complete non-converting costs, and a decision on the next scope                                       |
 
-The week-2 PoC is deliberately narrower than the assisted release. The initial runtime proof should not require a model, a sandbox service, production booking credentials, or a polished interface. Do not move every later feature into the first two weeks.
+The week-2 PoC is deliberately narrower than the assisted release. Runtime and harness proofs use a scripted model provider and synthetic supply; they require no paid inference, sandbox service, production booking credentials, or polished interface. The narrow integrated scenario is specified in the [engineering handoff](implementation-handoff.md). Its minimum brief/RFQ/proposal path must be pulled forward from the later business tasks so that week 2 proves one case, while broader coverage and customer interaction remain later work.
 
 ## Sequence
 

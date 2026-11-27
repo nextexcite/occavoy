@@ -31,6 +31,8 @@ jobs:
         run: pnpm check:python
       - name: Real local Rivet restart
         run: pnpm verify:runtime
+      - name: Real Pi Durable harness on Rivet
+        run: pnpm verify:harness
       - name: Verify no generated changes
         run: git diff --exit-code
 

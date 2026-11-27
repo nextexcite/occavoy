@@ -36,6 +36,20 @@ The runtime is a separate Rivet development probe. Its start command and verific
 are documented in [apps/runtime/README.md](apps/runtime/README.md). The web preview does not yet
 send real service requests to it. Local development requires no production credentials.
 
+The next implementation slice is specified in the [engineering handoff](docs/implementation-handoff.md).
+The [execution diagrams](docs/agent-execution.md) distinguish a customer relationship, a service
+case, a bounded agent job, and an external action. Run the domain scenario and real harness
+qualification separately:
+
+```sh
+mise exec -- pnpm demo:lifecycle
+mise exec -- pnpm verify:harness
+```
+
+The first is a synthetic business-state scenario. The second exercises the actual Rivet/Pi Durable
+integration with a scripted model provider and no paid inference. Neither command establishes a
+deployed commercial service.
+
 ```sh
 mise run check
 mise run experiment -- supplier-quotes
@@ -61,7 +75,10 @@ after adding its dependencies. See [experiments](experiments/README.md).
 ## Technical baseline
 
 - **Web:** Cloudflare Workers Paid, TanStack Start, React and TypeScript.
-- **Execution:** Rivet Cloud, Rivet 3 series. One owner for a case's execution lifecycle.
+- **Execution:** Rivet Cloud, Rivet 3 series. A deterministic case coordinator and separate
+  scoped agent jobs have distinct responsibilities within the same runtime.
+- **Agent harness:** qualify `@rivet-dev/pi@0.5.7` with the compatible Pi Durable `1.5.2`
+  family. See the [harness decision](docs/adr/0005-agent-harness.md) before changing these pins.
 - **Business records:** Postgres is the intended authority for quotes, approvals, orders and costs.
   Database integration is an upcoming PoC task; the runtime probe is not the commercial ledger.
 - **Objects:** R2 with an application budget of **8,000,000,000 bytes**, shared across Occavoy's
@@ -78,9 +95,8 @@ contracts; supply coverage grows through actual partner access.
 
 ## Working with a coding agent
 
-Read [AGENTS.md](AGENTS.md) and the assigned OCA issue before editing. The instructions are shared
-by human developers and any coding agent. `CLAUDE.md` and `GEMINI.md` point to the same source;
-no proprietary agent runtime is required.
+Read [AGENTS.md](AGENTS.md) and the assigned OCA issue before editing. This is the common
+instruction entry point for human developers and any coding agent.
 
 The [development guide](docs/development.md) covers MCP connections, project workflows,
 concurrent work, verification and handoffs. Use the same `mise` tasks in local editors,
@@ -90,6 +106,8 @@ remote workspaces and CI. MCP is optional; credentials stay in each user's secre
 
 - [PRD v0.2](docs/product/prd-v0.2.md)
 - [Architecture](docs/architecture.md)
+- [Customer lifecycle and harness invocation](docs/agent-execution.md)
+- [Concrete engineering handoff](docs/implementation-handoff.md)
 - [12-week milestones and measured workload](docs/roadmap.md)
 - [Development and agent workspace](docs/development.md)
 - [Historical project context in Eventsquare](https://chatgpt.com/space/page_6b05bcf5713081919f83e4123d0d20b0)

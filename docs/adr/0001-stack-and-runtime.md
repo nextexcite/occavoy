@@ -18,7 +18,7 @@ The initial Rivet stable candidate is `3.1.1`. Exact SDK, CLI, Node, build tooli
 
 Stable direct packages do not guarantee a prerelease-free dependency tree. For example, the selected stable Cloudflare Vite plugin declares prerelease internal dependencies. Retain the supported locked resolution, record relevant compatibility risk, and do not override internals merely to remove a suffix. [Versioned plugin manifest](https://github.com/cloudflare/workers-sdk/blob/%40cloudflare/vite-plugin%401.70.2/packages/vite-plugin-cloudflare/package.json)
 
-The pinned Rivet workflow queue used by the initial proof is deprecated in that release. Treat it as a contained qualification path. Before assisted commercial use, confirm a supported workflow interface or record a tested migration; do not silently combine it with a rolling standalone workflow package.
+The pinned Rivet workflow queue used by the initial `demoCase` proof is deprecated in that release. Treat it as a labelled legacy qualification path, not a production template. New case coordination uses supported actions with a durable inbox/drain and scheduling. If the separately versioned `@rivet-dev/workflows` package is needed, qualify it independently; do not silently combine rolling examples with the deprecated API. The selected agent-job harness is described in [ADR 0005](0005-agent-harness.md).
 
 The deployed-node configuration must connect to the cloud control plane rather than starting another embedded engine. Follow the pinned version and [current cloud deployment instructions](https://rivet.dev/docs/deploy/cloud/compute/); keep cluster-injected credentials out of source and browser bundles.
 

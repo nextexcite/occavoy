@@ -10,6 +10,8 @@ allowBuilds:
   workerd: true
   sharp: true
   cbor-extract: true
+  "@google/genai": false
+  protobufjs: false
 permissions:
   "@tanstack/react-router":
     skills: false
