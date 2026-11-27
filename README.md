@@ -110,6 +110,7 @@ remote workspaces and CI. MCP is optional; credentials stay in each user's secre
 - [Concrete engineering handoff](docs/implementation-handoff.md)
 - [12-week milestones and measured workload](docs/roadmap.md)
 - [Development and agent workspace](docs/development.md)
+- [Local environment lifecycle](docs/environment.md)
 - [Historical project context in Eventsquare](https://chatgpt.com/space/page_6b05bcf5713081919f83e4123d0d20b0)
 
 Current requirements and architectural decisions belong in this repository. Linear is the
