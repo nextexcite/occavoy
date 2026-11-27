@@ -144,23 +144,21 @@ mise run secrets:refresh
 ```
 
 This writes `.env.local` (ignored, mode 0600) inside a marker-managed block; hand-added
-entries outside the markers are preserved. Secrets follow the doctrine in the previous
-section: values live in Doppler, `fnox.toml` is the value-free mapping, and commands that
-need injection run through `fnox -P local --no-defaults exec -- <cmd>`.
+entries outside the markers are preserved. After a refresh, plain `pnpm dev:runtime` and
+`pnpm test` read the local snapshot offline. CI or shell variables already set in the
+process take precedence in this loader. Use `fnox exec` only for explicit live resolution.
 
 Verify the setup end to end:
 
 ```sh
 mise exec -- pnpm check                                                    # TS lint/typecheck/test/build
 mise exec -- pnpm check:python                                             # ruff + eval pytest
-mise exec -- fnox -P local --no-defaults exec -- pnpm test                  # incl. Postgres-backed tests
 mise exec -- pnpm verify:harness                                           # real Rivet/Pi Durable probe, no paid inference
 mise exec -- pnpm demo:lifecycle                                           # synthetic business-state scenario
 ```
 
 A full pass of the first two commands is the definition of "environment is set up". The
-Postgres-backed tests self-skip without `DATABASE_URL`, so run them through Doppler to prove
-the database path rather than assuming a pass. (`fnox exec` injects into the child process only; it never prints values.)
+Postgres-backed tests self-skip without `DATABASE_URL`; confirm they ran rather than assuming a pass.
 
 ## Day-to-day operation
 
