@@ -519,8 +519,36 @@ describe("uncertain external action and independent commercial observations", ()
       { kind: "handoff_unknown", actionId: "a", evidenceRef: "synthetic:timeout" },
       authority,
     );
-    const resolved = apply(
+    const unfenced = apply(
       unknown.state,
+      {
+        kind: "reconcile_handoff",
+        actionId: "a",
+        result: "not_executed",
+        source: "provider_lookup",
+        evidenceRef: "synthetic:lookup-before-fence",
+        providerReference: null,
+      },
+      authority,
+    );
+    expect(unfenced).toMatchObject({
+      outcome: "rejected",
+      reason: "terminal_nonexecution_proof_required",
+    });
+    const fence = {
+      fenceId: "synthetic:fence-1",
+      clientReference: "stable-ref",
+      attempt: 1,
+      evidenceRef: "synthetic:fence-evidence",
+    };
+    const fenced = apply(
+      unknown.state,
+      { kind: "fence_handoff_attempt", actionId: "a", fence },
+      authority,
+    );
+    expect(fenced.outcome).toBe("applied");
+    const resolved = apply(
+      fenced.state,
       {
         kind: "reconcile_handoff",
         actionId: "a",
@@ -528,9 +556,14 @@ describe("uncertain external action and independent commercial observations", ()
         source: "provider_lookup",
         evidenceRef: "synthetic:definitive-nonexecution",
         providerReference: null,
+        nonexecutionProof: { fenceId: fence.fenceId, attempt: 1 },
       },
       authority,
     );
+    expect(resolved.state.action?.reconciliationEvidence.at(-1)).toMatchObject({
+      attempt: 1,
+      fenceId: fence.fenceId,
+    });
     const retry = apply(resolved.state, { kind: "retry_handoff", actionId: "a" }, authority);
     expect(retry.outcome).toBe("applied");
     expect(retry.state.action).toMatchObject({
