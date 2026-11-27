@@ -1,3 +1,16 @@
+export { applyMigrations } from "./migrations";
+export {
+  type CaseCommandRow,
+  type CaseDomainEventRow,
+  type CaseOutboxRow,
+  CommandConflictError,
+  canonicalJson,
+  hashCommandPayload,
+  PostgresCaseStore,
+  type ReceivedCommandResult,
+  type StoredCommandResult,
+} from "./postgres-case-store";
+
 /** Decimal GB. One shared budget across all Occavoy-managed object prefixes/environments. */
 export const R2_CAPACITY_BYTES = 8_000_000_000;
 
