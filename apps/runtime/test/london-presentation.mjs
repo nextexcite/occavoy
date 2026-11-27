@@ -176,6 +176,7 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
     throw new Error("lookup callback is not active yet");
   };
 
+  let terminalPrompt = "";
   const handleCase = createCaseReturnHandler({
     resolveViewer: async (request) => {
       if (request.headers.get("authorization") === operatorBearer) {
@@ -193,6 +194,11 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
     store,
     approve: (input) => approveMutation(input),
     lookup: (input) => lookupMutation(input),
+    getWalkthroughHint: () =>
+      walkthrough
+        ? terminalPrompt ||
+          "The fixture is working. Wait for the next prompt in the demo terminal, then refresh this page."
+        : undefined,
   });
 
   const server = createServer();
@@ -302,6 +308,7 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-store");
     const text = await response.text();
+    assert.equal(text.includes('aria-label="Walkthrough guide"'), walkthrough);
     const after = await store.getCase(tenantId, caseId);
     const afterTimeline = await store.getTimeline(tenantId, caseId);
     assert.equal(after.revision, before.revision);
@@ -368,7 +375,12 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
 
   async function pauseIfWalkthrough(prompt) {
     if (!walkthrough) return;
-    await boundedPause(prompt);
+    terminalPrompt = prompt.trim();
+    try {
+      await boundedPause(prompt);
+    } finally {
+      terminalPrompt = "";
+    }
   }
 
   async function submitCommercial(coordinator, body, actorId, permissions, commandId) {
@@ -397,7 +409,7 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
   async function walkthroughApprovalPause() {
     if (!walkthrough) return;
     await pauseIfWalkthrough(
-      `In the browser, use the fixture sign-in at ${baseUrl}/ if needed, open the saved request, review it, then click "Approve this exact offer". Press Enter here after the page shows approval. `,
+      'Review the offer in the browser and choose "Approve this exact offer" if you want to proceed. Once the page shows Approved, press Enter in the demo terminal. ',
     );
     const started = Date.now();
     while (!(await store.getCase(tenantId, caseId)).approval) {
@@ -420,7 +432,7 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
     assert.ok(!text.includes("Approve this exact offer"));
     await checkSecurity(browser);
     await pauseIfWalkthrough(
-      `Open ${baseUrl}/ in a browser, sign in as the fixture customer, and confirm the saved London request is visible. Press Enter to continue. `,
+      "Sign in as the fixture customer and check the saved London request. Press Enter in the demo terminal to continue. ",
     );
     return { browser, cookie: firstCookie };
   }
@@ -442,7 +454,7 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
       "fresh login after runtime kill read the same activation and brief; no repost occurred",
     );
     await pauseIfWalkthrough(
-      `Reopen or refresh ${baseUrl}/ in the browser and confirm the same saved request survives the runtime interruption. Press Enter to recover the runtime. `,
+      "Reopen the saved request during the interruption. Press Enter in the demo terminal to restart the runtime. ",
     );
   }
 
@@ -466,7 +478,7 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
     );
     assert.ok(awaitingQuote.includes("No action needed from you."));
     await pauseIfWalkthrough(
-      "Refresh the saved case to see Awaiting quote. Press Enter to enter the synthetic event-access quote. ",
+      "Press Enter in the demo terminal to supply the synthetic quote. When the terminal asks for approval, refresh this page to see the offer. ",
     );
 
     const supplierId = rfq.supplierId;
@@ -759,7 +771,7 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
       return { status: "applied" };
     };
     await pauseIfWalkthrough(
-      "Refresh the customer tab to see the unavailable supplier reply. Press Enter here to perform the operator status lookup for the original supplier request. ",
+      "The supplier reply is unavailable. Press Enter in the demo terminal to check the original submission, then refresh this page. ",
     );
     const operatorUnknownPage = await operatorGet(OPERATOR_PATH);
     assert.equal(operatorUnknownPage.status, 200);
@@ -829,7 +841,7 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
       ["model_call", "tool_call", "tool_call", "model_call"],
     );
     await pauseIfWalkthrough(
-      "Refresh the same case to see Booking confirmed, payment not observed and fulfilment pending. Press Enter to end the demo and remove its local data. ",
+      "Check the booking, payment and fulfilment status. Press Enter in the demo terminal to end this run and remove its fixture data. ",
     );
     t.diagnostic(
       `london continuation: 1 quote / 1 proposal / 1 browser approval / ${fakeSupplier.submitCalls} supplier submit / ${fakeSupplier.orderCount} supplier order / ${supplier.lookupReferences.length} lookup; payment ${state.payment}, fulfillment ${state.fulfillment}`,

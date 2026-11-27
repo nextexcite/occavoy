@@ -20,6 +20,8 @@ MISE_ACTIVATE_AGGRESSIVE=1 mise exec -- pnpm verify:london
 
 Open the **loopback URL printed by the demo**, not the ordinary web preview on port 3000. Do not start a runtime or set provider keys. Each run creates its own schema in the fixture database on `127.0.0.1:54329` and its own native runtime and engine. Normal completion removes the demo's data and listeners, not Postgres. Return-to-case works **within a run**; starting the command again intentionally creates a new fixture.
 
+**If Refresh status keeps showing no offer:** keep the demo terminal beside the browser. The presenter guide above the saved case repeats the current terminal instruction. At **Awaiting quote**, press Enter in the terminal to supply the scripted quote; once the terminal asks for approval, refresh the browser to see the offer. Refresh alone never creates a quote. If a two-minute prompt timed out and the process exited, restart the demo and open the newly printed URL.
+
 ## Walkthrough
 
 1. **Request saved.** The driver has sent one explicit HTTP activation. Choose **Continue as the fixture customer**. Note the London performance and **731.00 GBP brief budget**. Close the tab and advance the terminal prompt.

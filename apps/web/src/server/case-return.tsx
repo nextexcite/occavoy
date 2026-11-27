@@ -278,7 +278,13 @@ function Header() {
   );
 }
 
-function CustomerPage({ view }: { view: CustomerView }) {
+function CustomerPage({
+  view,
+  walkthroughHint,
+}: {
+  view: CustomerView;
+  walkthroughHint: string | undefined;
+}) {
   const canApprove = view.canApprove && view.proposal !== null;
   return (
     <Document>
@@ -291,6 +297,17 @@ function CustomerPage({ view }: { view: CustomerView }) {
             Fixture demonstration only: no real purchase, inventory hold, payment or delivery is
             available.
           </p>
+          {walkthroughHint ? (
+            <aside className="panel" aria-label="Walkthrough guide">
+              <p className="eyebrow">Presenter guide · local demo only</p>
+              <p>
+                <strong>{walkthroughHint}</strong>
+              </p>
+              <p className="note">
+                Refresh status only rereads the case. Terminal prompts wait up to two minutes.
+              </p>
+            </aside>
+          ) : null}
           <div className="split">
             <section className="panel">
               <h2>Your saved request</h2>
@@ -554,6 +571,7 @@ export function createCaseReturnHandler(deps: {
   approve?(input: ApprovalMutationInput): Promise<MutationResult>;
   lookup?(input: LookupMutationInput): Promise<MutationResult>;
   now?: () => Date;
+  getWalkthroughHint?: () => string | undefined;
 }): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -608,7 +626,12 @@ export function createCaseReturnHandler(deps: {
     }
 
     if (customerRead) {
-      return html(<CustomerPage view={customerView(snapshot, viewer, now)} />);
+      return html(
+        <CustomerPage
+          view={customerView(snapshot, viewer, now)}
+          walkthroughHint={deps.getWalkthroughHint?.()}
+        />,
+      );
     }
     if (operatorRead) {
       return html(<OperatorPage snapshot={snapshot} />);
