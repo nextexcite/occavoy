@@ -91,6 +91,8 @@ CREATE TABLE case_outbox (
 );
 CREATE INDEX case_outbox_pending_idx
   ON case_outbox (available_at, id) WHERE status = 'pending';
+CREATE INDEX case_outbox_dispatched_idx
+  ON case_outbox (dispatched_at, id) WHERE status = 'dispatched';
 CREATE INDEX case_outbox_case_idx ON case_outbox (tenant_id, case_id, id);
 
 CREATE TABLE case_domain_events (

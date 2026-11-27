@@ -35,6 +35,9 @@ export function hashCommandPayload(command: CaseCommand): string {
   return createHash("sha256").update(canonicalJson(semantic)).digest("hex");
 }
 
+/** Default lease for a claimed outbox intent before it can be reclaimed. */
+export const DEFAULT_OUTBOX_LEASE_MS = 60_000;
+
 export class CommandConflictError extends Error {
   readonly code = "command_payload_conflict";
   constructor(commandId: string) {
@@ -292,7 +295,7 @@ export class PostgresCaseStore {
     const result = await this.pool.query(
       `SELECT ${EVENT_COLUMNS} FROM case_domain_events
        WHERE tenant_id = $1 AND case_id = $2 AND seq > $3
-       ORDER BY seq`,
+       ORDER BY case_domain_events.seq`,
       [tenantId, caseId, afterSeq ?? "0"],
     );
     return result.rows.map(eventRow);
@@ -466,14 +469,25 @@ export class PostgresCaseStore {
     const outboxIds: string[] = [];
     if (decision.outcome === "applied") {
       const next = decision.state;
+      // Commercial parties track the selected proposal's quote and the current
+      // brief. Records from an older briefVersion are ignored so a revision
+      // clears stale parties until new records for the revised brief arrive.
+      const selectedProposal = next.proposals
+        .filter((proposal) => proposal.briefVersion === next.brief.version)
+        .at(-1);
+      const selectedQuote = selectedProposal
+        ? next.quotes.find(
+            (quote) =>
+              quote.id === selectedProposal.quoteId &&
+              quote.version === selectedProposal.quoteVersion &&
+              quote.briefVersion === next.brief.version,
+          )
+        : next.quotes.filter((quote) => quote.briefVersion === next.brief.version).at(-1);
       const cas = await client.query(
         `UPDATE service_cases
          SET revision = $3, phase = $4, wait_reason = $5, brief_id = $6, brief_version = $7,
              outcome = $8, cancel_requested = $9, snapshot = $10,
-             seller_id = COALESCE(seller_id, $12),
-             fulfiller_id = COALESCE(fulfiller_id, $13),
-             payer_id = COALESCE(payer_id, $14),
-             updated_at = now()
+             seller_id = $12, fulfiller_id = $13, payer_id = $14, updated_at = now()
          WHERE tenant_id = $1 AND id = $2 AND revision = $11
          RETURNING revision`,
         [
@@ -488,8 +502,8 @@ export class PostgresCaseStore {
           next.cancelRequested,
           JSON.stringify(next),
           command.expectedRevision,
-          next.quotes.at(-1)?.sellerId ?? null,
-          next.quotes.at(-1)?.fulfillerId ?? null,
+          selectedQuote?.sellerId ?? null,
+          selectedQuote?.fulfillerId ?? null,
           next.brief.approverActorId,
         ],
       );
@@ -724,26 +738,61 @@ export class PostgresCaseStore {
     }
   }
 
-  /** Claims due pending intents for dispatch. FOR UPDATE SKIP LOCKED makes claims race-safe. */
+  /**
+   * Claims due pending intents and expired dispatched leases, so a worker that
+   * crashed after claiming is recoverable after `leaseTimeoutMs`.
+   * FOR UPDATE SKIP LOCKED makes concurrent claims race-safe.
+   */
   async claimPendingOutbox(
     limit: number,
-    filter?: { tenantId?: string },
+    options?: { tenantId?: string; now?: Date; leaseTimeoutMs?: number },
   ): Promise<CaseOutboxRow[]> {
-    const tenantId = filter?.tenantId ?? null;
+    const now = options?.now ?? new Date();
+    const leaseTimeoutMs = options?.leaseTimeoutMs ?? DEFAULT_OUTBOX_LEASE_MS;
+    const staleBefore = new Date(now.getTime() - leaseTimeoutMs);
     const result = await this.pool.query(
       `UPDATE case_outbox
-       SET status = 'dispatched', attempts = attempts + 1, dispatched_at = now()
+       SET status = 'dispatched', attempts = attempts + 1, dispatched_at = $3
        WHERE id IN (
          SELECT id FROM case_outbox
-         WHERE status = 'pending'
-           AND available_at <= now()
-           AND ($2::text IS NULL OR tenant_id = $2)
-         ORDER BY available_at, id
+         WHERE (
+           (status = 'pending' AND available_at <= $3)
+           OR (status = 'dispatched' AND dispatched_at <= $4)
+         )
+         AND ($2::text IS NULL OR tenant_id = $2)
+         ORDER BY COALESCE(dispatched_at, available_at), id
          LIMIT $1
          FOR UPDATE SKIP LOCKED
        )
        RETURNING ${OUTBOX_COLUMNS}`,
-      [limit, tenantId],
+      [limit, options?.tenantId ?? null, now, staleBefore],
+    );
+    return result.rows.map(outboxRow);
+  }
+
+  /**
+   * Explicitly resets expired 'dispatched' leases back to 'pending' so they are
+   * eligible for the next claimPendingOutbox. Returns the reset rows.
+   */
+  async reclaimStaleOutbox(options?: {
+    tenantId?: string;
+    now?: Date;
+    leaseTimeoutMs?: number;
+  }): Promise<CaseOutboxRow[]> {
+    const now = options?.now ?? new Date();
+    const leaseTimeoutMs = options?.leaseTimeoutMs ?? DEFAULT_OUTBOX_LEASE_MS;
+    const staleBefore = new Date(now.getTime() - leaseTimeoutMs);
+    const result = await this.pool.query(
+      `UPDATE case_outbox
+       SET status = 'pending', available_at = $2
+       WHERE id IN (
+         SELECT id FROM case_outbox
+         WHERE status = 'dispatched' AND dispatched_at <= $3
+           AND ($1::text IS NULL OR tenant_id = $1)
+         FOR UPDATE SKIP LOCKED
+       )
+       RETURNING ${OUTBOX_COLUMNS}`,
+      [options?.tenantId ?? null, now, staleBefore],
     );
     return result.rows.map(outboxRow);
   }
@@ -769,7 +818,7 @@ export class PostgresCaseStore {
   async listOutboxForCase(tenantId: string, caseId: string): Promise<CaseOutboxRow[]> {
     const result = await this.pool.query(
       `SELECT ${OUTBOX_COLUMNS} FROM case_outbox
-       WHERE tenant_id = $1 AND case_id = $2 ORDER BY id`,
+       WHERE tenant_id = $1 AND case_id = $2 ORDER BY case_outbox.id`,
       [tenantId, caseId],
     );
     return result.rows.map(outboxRow);
@@ -783,7 +832,7 @@ export class PostgresCaseStore {
   ): Promise<string[]> {
     const result = await client.query(
       `SELECT id::text AS id FROM case_outbox
-       WHERE tenant_id = $1 AND case_id = $2 AND command_id = $3 ORDER BY id`,
+       WHERE tenant_id = $1 AND case_id = $2 AND command_id = $3 ORDER BY case_outbox.id`,
       [tenantId, caseId, commandId],
     );
     return result.rows.map((row) => row.id);
