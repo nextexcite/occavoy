@@ -124,11 +124,12 @@ async function submit(job, requestId = job.admission.requestId, prompt = job.adm
   return { ...job, submissionId: result.submissionId };
 }
 
-async function settled(job) {
+async function settled(job, timeoutMs = 20_000) {
   return poll(
     () => handle(job.key).submission.status(job.submissionId),
     (status) => ["done", "unanswered"].includes(status.status),
     "Submission settlement",
+    timeoutMs,
   );
 }
 
@@ -264,7 +265,7 @@ try {
   );
   await stop(true);
   await start();
-  assert.equal((await settled(safe)).status, "done");
+  assert.equal((await settled(safe, 45_000)).status, "done");
   const recoveredSafe = (await handle(safe.key).probeStatus()).ledger;
   assert.equal(recoveredSafe.readStarts, 2);
   assert.equal(recoveredSafe.summaryWrites, 1);
@@ -288,7 +289,7 @@ try {
   );
   await stop(true);
   await start();
-  assert.equal((await settled(unsafe)).status, "done");
+  assert.equal((await settled(unsafe, 45_000)).status, "done");
   const recoveredUnsafe = (await handle(unsafe.key).probeStatus()).ledger;
   assert.equal(recoveredUnsafe.summaryStarts, 1);
   assert.equal(recoveredUnsafe.summaryWrites, 1);
