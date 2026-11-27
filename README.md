@@ -52,6 +52,9 @@ The first is a synthetic business-state scenario. The second exercises the actua
 integration with a scripted model provider and no paid inference. Neither command establishes a
 deployed commercial service.
 
+For the [local HTTP-to-supplier case trace](docs/local-case-trace.md), use disposable Postgres.
+It shows one lost supplier reply reconciled without a second order; identity, model work and supply are fixtures.
+
 ```sh
 mise run check
 mise run experiment -- supplier-quotes
@@ -82,7 +85,8 @@ after adding its dependencies. See [experiments](experiments/README.md).
 - **Agent harness:** qualify `@rivet-dev/pi@0.5.7` with the compatible Pi Durable `1.5.2`
   family. See the [harness decision](docs/adr/0005-agent-harness.md) before changing these pins.
 - **Business records:** Postgres records commands, decisions, immutable commercial versions and
-  emitted outbox intents. Live identity/grant resolution and the end-to-end request path are not wired.
+  emitted outbox intents. Explicit case activation is atomic in the local HTTP trace. The public
+  intake route and live identity/grant resolution are not wired.
 - **Objects:** R2 with an application budget of **8,000,000,000 bytes**, shared across Occavoy's
   managed environments. The Postgres quota ledger exists; live inventory reconciliation and
   uploads remain disabled. An R2 binding is not a native 8 GB account quota.
