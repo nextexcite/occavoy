@@ -136,6 +136,89 @@ describe("finite cases and bounded candidate work", () => {
     expect(late.state.requirements).toEqual([]);
   });
 
+  it("records a stopped task as intervention evidence, fenced by permission and task identity", () => {
+    const { state, authority } = fixture();
+    const started = apply(
+      state,
+      { kind: "activate", taskId: "t1", maxModelCalls: 2, maxToolCalls: 3 },
+      authority,
+    );
+    const task = started.state.activeTask;
+    if (!task) throw new Error("Missing fixture task");
+    const stopAuthority = { ...authority, permissions: ["agent.stop" as const] };
+
+    // The candidate/result grant does not subsume stop authority and vice versa.
+    const unauthorized = apply(
+      started.state,
+      { kind: "agent_task_stopped", task, reason: "budget_exhausted" },
+      authority,
+    );
+    expect(unauthorized).toMatchObject({
+      outcome: "rejected",
+      reason: "authority_or_scope_mismatch",
+    });
+    expect(unauthorized.state.activeTask).toEqual(task);
+
+    const wrongTask = apply(
+      started.state,
+      {
+        kind: "agent_task_stopped",
+        task: { ...task, taskId: "someone-elses-task" },
+        reason: "budget_exhausted",
+      },
+      stopAuthority,
+    );
+    expect(wrongTask).toMatchObject({ outcome: "ignored", reason: "stale_agent_task" });
+    expect(wrongTask.state.activeTask).toEqual(task);
+
+    // An unexpired deadline cannot be recorded as expired.
+    const premature = apply(
+      started.state,
+      { kind: "agent_task_stopped", task, reason: "deadline_exceeded" },
+      stopAuthority,
+    );
+    expect(premature).toMatchObject({ outcome: "rejected", reason: "agent_task_not_expired" });
+
+    const stopped = apply(
+      started.state,
+      { kind: "agent_task_stopped", task, reason: "budget_exhausted" },
+      stopAuthority,
+    );
+    expect(stopped.outcome).toBe("applied");
+    expect(stopped.state.phase).toBe("clarifying");
+    expect(stopped.state.waitReason).toBe("agent_intervention");
+    expect(stopped.state.activeTask).toBeNull();
+    expect(stopped.state.lastAgentTaskStop).toEqual({
+      taskId: "t1",
+      reason: "budget_exhausted",
+    });
+    // Commercial state is untouched: no outcome, no approval, no causal rewrite.
+    expect(stopped.state.outcome).toBeNull();
+    expect(stopped.intents).toEqual([]);
+
+    // A repeated stop for the same task is evidence-free noise, not a failure.
+    const repeated = apply(
+      stopped.state,
+      { kind: "agent_task_stopped", task, reason: "budget_exhausted" },
+      stopAuthority,
+    );
+    expect(repeated).toMatchObject({ outcome: "ignored", reason: "stale_agent_task" });
+
+    // Intervention does not grant the candidate permission any new power.
+    const lateCandidate = apply(
+      stopped.state,
+      {
+        kind: "agent_candidate",
+        candidate: {
+          task,
+          requirements: [{ id: "hotel", category: "accommodation", description: "Late result" }],
+        },
+      },
+      authority,
+    );
+    expect(lateCandidate).toMatchObject({ outcome: "ignored", reason: "stale_agent_candidate" });
+  });
+
   it("a candidate-only runtime grant cannot approve a purchase", () => {
     const { state, authority } = atApprovedCase();
     state.phase = "awaiting_approval";

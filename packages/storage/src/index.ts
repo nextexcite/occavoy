@@ -13,3 +13,15 @@ export {
   type StoredCommandResult,
 } from "./postgres-case-store";
 export { PostgresQuotaLedger, ReservationSizeMismatchError } from "./postgres-quota-ledger";
+export {
+  type CaseAllowance,
+  type CaseAllowanceSpec,
+  type CaseAllowanceStatus,
+  type CaseUsageRow,
+  PostgresUsageLedger,
+  UsageAllowanceError,
+  type UsageCostCategory,
+  type UsageKind,
+  type UsageReservationInput,
+  type UsageReservationResult,
+} from "./postgres-usage-ledger";

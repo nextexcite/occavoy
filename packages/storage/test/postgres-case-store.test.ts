@@ -27,6 +27,7 @@ const PERMISSIONS: Record<CaseCommandBody["kind"], CasePermission> = {
   cancel: "case.edit",
   revise_brief: "case.edit",
   agent_candidate: "agent.result",
+  agent_task_stopped: "agent.stop",
   request_quote: "supply.request",
   record_quote: "supply.record",
   stage_proposal: "proposal.write",
@@ -325,7 +326,16 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
   it("applies migrations idempotently and rolls a failing migration back cleanly", async () => {
     const recorded = await pool.query("SELECT version FROM schema_migrations ORDER BY version");
     expect(recorded.rows.map((row) => row.version)).toEqual(
-      expect.arrayContaining(["001_quota", "002_case_core", "003_attempt_fences"]),
+      expect.arrayContaining([
+        "001_quota",
+        "002_case_core",
+        "003_attempt_fences",
+        "003_quota_reconciliation",
+        "004_usage_allowances",
+        "005_case_job_request_scope",
+        "006_agent_intervention",
+        "007_outbox_dispatched_index",
+      ]),
     );
     expect(await applyMigrations(pool)).toEqual([]);
     const client = await pool.connect();
