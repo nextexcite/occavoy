@@ -1,10 +1,10 @@
 # ADR 0002: Business records and recoverable external actions
 
-Status: accepted design; implementation must pass failure tests.
+Status: accepted design; local proof in the merged Postgres case store and effect dispatcher (see the [implementation handoff](../implementation-handoff.md#starting-evidence)). Cloud and real-provider evidence remain open.
 
 ## Decision
 
-Keep commercial truth in Postgres. Rivet execution state stores command reception, progress, and references to business records. Proposal terms, approvals, orders, and payments must not have independently authoritative copies in actor memory or a transcript.
+Keep commercial truth in Postgres. Rivet execution state stores a recoverable drain schedule receipt, progress, and references to business records; the Postgres command ledger holds command reception and completion. Proposal terms, approvals, orders, and payments must not have independently authoritative copies in actor memory or a transcript.
 
 Accept commands transactionally with an outbox. Deliver at least once, deduplicate by command ID and payload hash, and persist completion separately from reception. An identical retry returns the earlier result; the same ID with different input is rejected.
 
@@ -20,6 +20,8 @@ Before a purchase or other state-changing provider action, persist its fixed ID,
 | Provider confirms no action occurred           | Decide whether a permitted retry is still valid                   |
 | Provider cannot establish the result           | Preserve `unknown` and assign reconciliation                      |
 | Customer cancels after dispatch may have begun | Stop new actions; reconcile and apply the provider's change rules |
+
+A negative lookup is not terminal: fence the exact attempt, persist that fence, and obtain fresh provider evidence or equivalent attempt-bound operator proof. Without it, reconciliation remains open. Retry only if the current authority, approval, quote and cancellation checks still permit it.
 
 Re-check approval, price validity, and cancellation at the point of dispatch. A new proposal requires a new approval. Expiry or local rollback does not undo a provider's action.
 

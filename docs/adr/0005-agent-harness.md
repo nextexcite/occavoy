@@ -45,9 +45,9 @@ server context, not a model argument or an unverified actor key. Give tasks a re
 deadline, allowed tools, and an execution allowance. Bound each run and the total number of
 continuations; a new conversation or continuation must not reset the case's spending allowance.
 
-The first topology keeps the harness in the Rivet Node application. Cloudflare Workers handles
-authenticated web requests and returns a durable operation reference rather than holding the
-request open. Postgres remains the intended authority for quotes, approvals, external actions,
+The first topology keeps the harness in the Rivet Node application. Cloudflare Workers is the
+target for authenticated web requests and returns a durable operation reference rather than
+holding the request open; that authenticated boundary is not yet wired. Postgres remains the intended authority for quotes, approvals, external actions,
 orders, and costs. Pi's Actor database is execution state, not another commercial ledger.
 See [ADR 0002](0002-business-truth-and-effects.md).
 
@@ -167,12 +167,12 @@ does not establish that the adapter starts or persists. Record observed results 
 handoff; a local pass does not complete the broader gates below or establish a cloud deployment.
 
 The checked-in [runtime qualification](../../apps/runtime/README.md) passed locally: actual
-model/tool turns with a scripted provider, submission deduplication, actor-scope isolation,
-persisted attempt limits, a turn limit, deadline handling, and process-kill recovery for safe
-and unsafe tools. The [domain scenario](../../packages/domain/src/case-lifecycle.ts) separately
-tests commercial transition rules with synthetic records. These are two separate proofs;
-their production wiring, paid inference, Cloud recovery, provider integration and upgrade
-qualification are still open.
+model/tool turns with a scripted provider against the real Pi adapter, submission deduplication,
+actor-scope isolation, persisted attempt limits, a turn limit, deadline handling, and
+process-kill recovery for safe and unsafe tools. Separately, the Postgres case store,
+coordinator, usage ledger, effect dispatcher and quota ledger pass real-PG local tests. These
+are distinct proofs; their production wiring, the missing production host invoker, paid
+inference, Cloud recovery, provider integration and upgrade qualification are still open.
 
 | Gate                           | Required evidence                                                                                                                         |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |

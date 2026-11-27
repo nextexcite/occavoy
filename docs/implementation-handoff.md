@@ -4,13 +4,18 @@ Read [AGENTS.md](../AGENTS.md), [agent execution](agent-execution.md), [ADR 0005
 
 ## Starting evidence
 
-| Area           | Current artifact                                                             | What it does not establish                                                            |
-| -------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Web            | `apps/web`: discovery, brief and partner previews                            | Authenticated commands, case persistence or live supply                               |
-| Runtime        | `apps/runtime`: local Rivet qualification probes                             | Rivet Cloud deployment or a production case coordinator                               |
-| Harness        | `@rivet-dev/pi` with a pinned compatible Pi Durable family; `verify:harness` | Paid-model quality, production budgets, commercial authority or Cloud recovery        |
-| Lifecycle      | `packages/domain/src/case-lifecycle.ts` and its tests                        | Postgres transactions, a multi-component order system or external provider guarantees |
-| Object storage | `packages/storage`: quota admission policy and ledger contract               | A deployed durable quota ledger; uploads remain disabled                              |
+Evidence frozen at merge commit `6112523`: [passing CI](https://github.com/nextexcite/occavoy/actions/runs/45982258175/job/140448854845) ran on `103e61c`, whose tree is identical to `6112523` — 76 Vitest tests, 21 runtime Node tests, 7 Python tests, both local restart harnesses, 0 paid model calls and 0 external effects in the Pi probe. No cloud deployment, supplier, or customer is involved. The startup recipe for these checks is in [development.md](development.md) and the CI workflow.
+
+| Surface | Local proof | Missing / not established |
+| --- | --- | --- |
+| Web | `apps/web` preview screens render local data | Nothing is saved; no verified customer or partner identity; no case submission |
+| Case store | [`packages/storage/src/postgres-case-store.ts`](../packages/storage/src/postgres-case-store.ts): scoped command ID/payload-hash deduplication and case revision CAS, domain events, outbox intents, immutable quote/proposal/approval versions — tested in [`packages/storage/test/postgres-case-store.test.ts`](../packages/storage/test/postgres-case-store.test.ts) | No HTTP boundary or authentication in front of it |
+| Case coordinator | `serviceCase` in [`apps/runtime/src/service-case.ts`](../apps/runtime/src/service-case.ts): outbox leases, drain, scheduling, stale-RFQ and cancellation fencing, agent-task stop before acknowledgement — tested in [`apps/runtime/test/service-case.test.mjs`](../apps/runtime/test/service-case.test.mjs) | No production delivery transport or wired create/activate API |
+| Usage limits | [`packages/storage/src/postgres-usage-ledger.ts`](../packages/storage/src/postgres-usage-ledger.ts): per-task and per-case running limits; a per-task denial does not pause the case | No paid-model pricing or monetary settlement |
+| Job adapter | The [case-job adapter](../apps/runtime/src/case-job-adapter.ts) validates the job fence with injected runners in [coordinator tests](../apps/runtime/test/service-case.test.mjs). Separately, the [Pi harness](../apps/runtime/test/verify-harness.mjs) runs a real Pi Durable loop with a scripted provider. | No invocation connects these two proofs in the default host. |
+| Effect dispatch | [`packages/storage/src/effect-dispatcher.ts`](../packages/storage/src/effect-dispatcher.ts) on real Postgres with the synthetic in-memory [`FakeSupplierAdapter`](../packages/storage/src/fake-supplier.ts) under the same live fixture | No cross-provider restart, no real supplier, `supplier_handoff` not yet wired to the coordinator |
+| Quota ledger | [`packages/storage/src/postgres-quota-ledger.ts`](../packages/storage/src/postgres-quota-ledger.ts): singleton 8,000,000,000-byte budget, quarantines oversized observations, serializes admission against quarantine writes | No real R2 inventory reconciliation; uploads remain disabled |
+| Identity and grants | The reducer checks caller-supplied tenant, case, permission, expiry and actor/grant context; tests supply synthetic authority. | Not implemented as public authentication; no grant resolution or grant store |
 
 Use actual test output and the issue record for the latest verification result. Do not change an issue to Done merely because an interface or fixture exists.
 
@@ -35,14 +40,16 @@ The sequence requires an operator form and a case timeline, not a map, voice UI,
 
 ## Work order and file boundaries
 
-| Order | Linear work                          | Concrete implementation                                                                                                                                       | Required proof                                                                                          |
-| ----- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| 1     | OCA-33 qualification and OCA-2 Cloud | Preserve the tested compatible dependency tuple; run `verify:harness`; deploy the actual image to Rivet Cloud                                                 | Model/tool loop, duplicate request, interrupted work and tenant boundary checked on the intended build  |
-| 2     | OCA-4                                | Add Postgres migrations/repository under `packages/storage`; command + outbox + result transaction; version CAS; effect intent and immutable approval records | Failure after commit/before delivery, duplicate ID, conflicting payload and stale revision              |
-| 3     | OCA-5 and OCA-7                      | Implement `apps/runtime/src/service-case.ts` and a case-to-job adapter; atomically claim pending work; schedule due cases; enforce job/case allowance         | Waiting without model work; cancellation while a job runs; restart and missed-completion reconciliation |
-| 4     | OCA-6                                | Add a deterministic effect adapter and a fake provider with a persistent action ledger                                                                        | Provider success/local-response-loss; stable reference; no blind reissue; late callback handling        |
-| 5     | OCA-9 through OCA-14, narrow subset  | Connect sourced/fixture event → brief → requirements → manual RFQ → quote → proposal                                                                          | The scenario above passes with one supplier component before expanding product coverage                 |
-| 6     | OCA-15 through OCA-17                | Connect the three customer areas and operator exception path to the same persisted contracts                                                                  | Refresh/reconnect preserves state; the UI shows waiting, stale approval and unknown outcomes accurately |
+The durable foundation rows below are locally proven; the remaining work reuses them rather than adding parallel structures. The labels do not mark any Linear issue accepted. Case creation and activation are separate store APIs today — an atomic create-plus-activation HTTP route is a target, not an existing path.
+
+| Order | Linear work | Reuse | Concrete remaining gates |
+| --- | --- | --- | --- |
+| 1 | OCA-33 qualification and OCA-2 Cloud | Preserve the tested compatible dependency tuple; `verify:harness` passes locally | Deploy the actual image to Rivet Cloud; model/tool loop, duplicate request, interrupted work and tenant boundary checked on the intended build |
+| 2 | OCA-4 (local store) | `PostgresCaseStore` command + outbox + result transaction, version CAS, immutable records | Scoped authenticated HTTP boundary: `receiveCommand` persists a receipt only — completion outbox versus receive receipt must stay distinct; no model work inside the request; atomic create+activate route |
+| 3 | OCA-5 and OCA-7 (local slices) | `serviceCase` coordinator, case-to-job adapter, atomic outbox claim, due-case scheduling, job/case allowances | Real Pi loop through a host-injected invoker with a stable request ID; production adapter wiring |
+| 4 | OCA-6 (synthetic supplier) | `DeterministicEffectDispatcher` and fake supplier fixture | Wire `supplier_handoff` recovery to the existing dispatcher. **A replayed intent is not permission to send**: only a fresh dispatch transaction may send. Positive lookup under the original reference; a negative retry needs a durable fence of the exact attempt plus fresh terminal evidence and rechecked terms. If proof is absent, stay `unknown` — do not close or rebook |
+| 5 | OCA-9 through OCA-14, narrow subset | Domain lifecycle and store contracts | Synthetic RFQ/response, manual operator path and timeline connecting sourced/fixture event → brief → requirements → quote → proposal |
+| 6 | OCA-15 through OCA-17 | Same persisted contracts | Connect the three customer areas and operator exception path; refresh/reconnect preserves state; the UI shows waiting, stale approval and unknown outcomes accurately |
 
 The week-2 milestone covers the **narrow integrated scenario**, including a minimal subset of the later business work. Full catalog, partner access controls, polished customer interaction and broader supply remain week-4/pilot work. Do not wait until week 4 to discover that the runtime cannot complete a case.
 
@@ -54,7 +61,7 @@ These are application-level API targets, not claims that these routes already ex
 
 | Entry point                             | Input and trusted context                                                   | Durable result                                                               |
 | --------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `POST /api/cases`                       | Authenticated principal; explicit activation; brief and client command ID   | Case, command receipt and outbox in one transaction                          |
+| `POST /api/cases`                       | Authenticated principal; explicit activation; brief and client command ID   | Case, command receipt and outbox in one transaction (target: atomic create+activation; today they are separate store calls) |
 | `POST /api/cases/:id/commands`          | Principal and tenant from auth; command ID; expected version; typed payload | Accepted or rejected receipt; an identical retry returns the earlier receipt |
 | `GET /api/cases/:id`                    | Authorized case access                                                      | Current version, phase, waiting reason and public decision state             |
 | `GET /api/cases/:id/timeline?after=...` | Authorized case access and cursor                                           | Persisted ordered events; streaming may deliver additional notifications     |
@@ -62,46 +69,20 @@ These are application-level API targets, not claims that these routes already ex
 
 Approval is a typed command through the same boundary, not a free-text chat acknowledgement. Derive the approving actor and permitted scope from verified identity/grants. An approval must bind the immutable proposal version/hash, exact authorized amount and currency, action scope, and expiry.
 
-An agent-job specification includes:
+An agent-job specification is defined by the checked-in [`apps/runtime/src/case-job-adapter.ts`](../apps/runtime/src/case-job-adapter.ts), not a sketch: the caller allocates `taskId` (which maps to the actor key's third component), `requestId` (stable across transport retries), `baseRevision` (the case revision fence), `briefVersion` (carried in job input and result, fenced before applying a candidate), purpose, tool profile, deadline and allowance. A changed brief or a new reasoning objective gets a new job. Use durable completion lookup under the original job when a reply is lost.
 
-```ts
-// Application contract sketch. Use the checked-in domain types where they exist.
-type AgentJobSpec = {
-  tenantId: string;
-  caseId: string;
-  jobId: string;
-  requestId: string;
-  baseRevision: number;
-  briefVersion: number;
-  purpose: "clarify_brief" | "derive_requirements" | "explain_proposal";
-  toolProfile: "case_readonly_v1";
-  deadlineAt: string;
-  allowanceId: string;
-};
-```
-
-The caller, not the model, allocates these fields. A transport retry reuses them. A changed brief or a new reasoning objective gets a new job. Use durable completion lookup under the original job when a reply is lost.
-
-The two current proofs deliberately have separate contracts. The integration must map and validate them explicitly:
-
-| Domain contract | Current runtime probe                | Integration requirement                                                                   |
-| --------------- | ------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `taskId`        | Actor key's third component, `jobId` | Allocate one stable job identity and persist the mapping.                                 |
-| `caseRevision`  | `baseRevision`                       | Reject a result derived from an older case revision.                                      |
-| `briefVersion`  | Not present in the probe envelope    | Carry it in the production job input and result; validate it before applying a candidate. |
-
-Do not cast a probe result to `AgentTaskCandidate`. The probe's signed fixture input is not the production authentication, authorization or business-result validation boundary.
+The actor probe alone cannot generate a trusted commercial record: its signed fixture input is not the production authentication, authorization or business-result validation boundary, and the host invoker connecting the adapter to a production Pi actor is still missing. Do not cast a probe result to `AgentTaskCandidate`.
 
 ## Persistence responsibilities
 
 Before introducing a new state store, explain which existing owner cannot hold the record:
 
-- Postgres: relationships/grants, cases, brief revisions, commands/results, outbox, jobs and allowances, RFQs, quote/proposal revisions, approvals, effects, order/payment/fulfilment observations and timeline events.
-- Case actor SQLite: recoverable local receipt/drain state and execution references. It cannot overwrite a newer Postgres business revision.
+- Postgres: relationships/grants, cases, brief revisions, commands/results, outbox, jobs and allowances, RFQs, quote/proposal revisions, approvals, effects, order/payment/fulfilment observations and timeline events. Command rows already persist actor and grant IDs as evidence references, but grant resolution and a grant store are not implemented; not every target record needs its own table today.
+- Case actor SQLite: a recoverable drain schedule receipt and execution references. It cannot overwrite a newer Postgres business revision.
 - Pi actor SQLite: conversation, model/tool checkpoints and submission deduplication for the scoped agent job. Do not put this in an ordinary container-local file.
 - R2: bounded evidence objects through the quota ledger. Never use object existence alone as proof of a commercial outcome.
 
-Required database constraints include unique tenant/command ID, unique tenant/action ID and provider reference, payload-hash conflict checks, immutable proposal versions, and conditional case-version updates. The transport may be retried; the transaction must decide whether work is new, already applied, stale, or unresolved.
+Required database constraints include unique tenant/command ID, tenant-scoped unique action ID and client reference (the supplier reference is nullable until confirmed), payload-hash conflict checks, immutable proposal versions, and conditional case-version updates. The transport may be retried; the transaction must decide whether work is new, already applied, stale, or unresolved.
 
 ## Version and framework rules
 
@@ -113,6 +94,6 @@ Do not install Eve, fx, Restate, a sandbox, another queue, or another state-mach
 
 ## Definition of the next useful result
 
-A reviewable next result is one accepted case that can pause for input, survive a restart, receive a supplier response, enforce current approval and preserve an uncertain supplier outcome. Report the commit, exact commands, environment, observed state transitions, failed scenarios, active engineering time and remaining blockers.
+A reviewable next result is one accepted case that can pause for input, survive a restart, receive a supplier response, enforce current approval and preserve an uncertain supplier outcome. Report the commit, exact commands, environment, observed state transitions, failed scenarios, active engineering time and remaining blockers. The runnable startup recipe is in [development.md](development.md) and the CI workflow.
 
 Keep cloud, paid-model and real-supplier evidence distinct from the deterministic fixtures. The eventual partner demo must clearly show which boundary is simulated and which is live.

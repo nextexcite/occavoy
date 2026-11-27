@@ -20,6 +20,8 @@ The first commercial hypothesis is that channel partners can bring recurring, pu
 
 Dates and release gates are in the [roadmap](../roadmap.md). Defer features when they threaten these outcomes; preserve approval, commercial truth, and recovery requirements.
 
+The merged foundation supports one quoted component in local tests, not a sale. A quote is not a hold; only the designated approver acting under a valid grant can approve the exact version, amount, currency, scope and expiry. Payment, booking confirmation and delivery need separate evidence. Reuse the relationship for a new case, never its approval or allowance. The [implementation handoff](../implementation-handoff.md) records which of these steps are locally proven.
+
 ## Roles and service unit
 
 The central object is a **ServiceCase** with a customer, brief, scope, deadline, execution allowance, responsible parties, and an explicit result. A customer relationship can span several cases. Saving an interesting event does not itself create a running case.
@@ -79,7 +81,7 @@ Start with clear forms, lists, status, and actions. A map, voice input, native a
 
 ## Commercial boundaries
 
-The initial product supports supplier checkout or authorized manual fulfillment, plus a separately agreed Occavoy service or partner-project fee. State who sells, who collects, who fulfills, who handles changes, and what evidence confirms each step. Real services require an appropriate operating arrangement; an accessible API does not establish a right to sell.
+The assisted pilot requires an authorized seller checkout or manual fulfilment arrangement, plus a separately agreed Occavoy service or partner-project fee; no live route is claimed. State who sells, who collects, who fulfills, who handles changes, and what evidence confirms each step. Real services require an appropriate operating arrangement; an accessible API does not establish a right to sell.
 
 Do not count referral clicks, proposal value, gross supplier receipts, or sandbox orders as Occavoy revenue. Do not count several components of the same trip as repeat customer purchases. Partner project contribution includes delivery and non-converting work.
 

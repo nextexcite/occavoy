@@ -4,7 +4,7 @@ Status: implementation specification, 27 November 2026. The executable fixtures 
 
 ## The decision
 
-Use **Rivet Cloud for the application runtime**, a **deterministic coordinator for each service case**, and **Pi Durable through `@rivet-dev/pi` for bounded reasoning jobs**. Postgres remains the authority for commercial records. The Pi integration is a qualified PoC candidate with pinned dependencies; its Cloud deployment and commercial failure boundaries still need verification.
+Use **Rivet Cloud for the application runtime**, a **deterministic coordinator for each service case**, and **Pi Durable through `@rivet-dev/pi` for bounded reasoning jobs**. Postgres remains the authority for commercial records. The Pi integration is a qualified PoC candidate with pinned dependencies; its Cloud deployment, production invoker wiring and commercial failure boundaries still need verification.
 
 This creates two kinds of actor in the same Rivet application. The case coordinator decides which business operation is permitted. An agent-job actor performs a bounded piece of reasoning and returns a candidate result. Pi Durable owns the inner model/tool checkpoints. It does not decide whether a purchase was authorized or fulfilled.
 
@@ -14,11 +14,11 @@ The coding agent used to develop this repository is independent of the harness e
 
 | Object                | Identity               | Lives for                                                       | Authority and purpose                                                                     |
 | --------------------- | ---------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Customer relationship | tenant + customer      | Many occasions and cases                                        | Postgres: preferences, consent, channel grants, service history and follow-up eligibility |
-| Service case          | tenant + case          | An activated request through its documented outcome             | Postgres commercial state; one Rivet coordinator advances the permitted work              |
+| Customer relationship | relationship ID scoped by tenant; references customer | Many occasions and cases            | Postgres: preferences, consent, service history and follow-up eligibility; channel grants are a target, not an existing table |
+| Service case          | tenant + case          | An activated request through its documented outcome             | Postgres commercial state; one Rivet coordinator advances the permitted work; actor SQLite holds only a recoverable drain schedule receipt |
 | Conversation          | case + conversation    | A communication thread, possibly many turns                     | Saved messages and presentation; it is not approval or booking authority                  |
 | Agent job             | tenant + case + job    | One assigned reasoning objective, with a deadline and allowance | Pi Durable checkpoints inside a Rivet actor; result is bound to the input case revision   |
-| External action       | tenant + case + action | Dispatch intent through confirmed or unresolved outcome         | Postgres effect ledger plus provider evidence; one stable provider reference              |
+| External action       | tenant + case + action | Dispatch intent through confirmed or unresolved outcome         | Postgres effect ledger plus provider evidence; a stable client reference, with the provider reference recorded only after confirmation |
 
 One customer may have two active cases. One case may need several agent jobs. A saved occasion does not start a paid background loop. A new customer message does not necessarily require a model: explicit cancel, approve, status and supplier callbacks are deterministic commands.
 
@@ -48,6 +48,8 @@ For the first partner demonstration, use one synthetic Hong Kong customer intere
 
 ## Deployment and invocation
 
+The diagram and the HTTP invocation flow below are the **target** shape. Locally, the coordinator, store, dispatcher and adapter exist in tests; the authenticated web boundary, the production Pi invoker and every live supplier edge are not wired.
+
 ```mermaid
 flowchart TD
     U["Customer or operator"] --> W["TanStack on Workers"]
@@ -58,28 +60,27 @@ flowchart TD
     J --> H["Pi Durable harness"]
     H --> M["Model provider"]
     H --> T["Allowed domain tools"]
-    J --> D
+    J -->|candidate only| C
     C --> E["Deterministic effect dispatcher"]
     E --> S["Supplier or fulfilment partner"]
     S --> W
     C --> D
-    T --> D
 ```
 
 The outbox dispatcher and effect dispatcher are application modules, not additional workflow platforms. Start with one Workers deployment and one Rivet Node application. Workers schedules may scan due database records and notify actors; they do not become a second owner of a case. R2 stores selected evidence through the existing 8 GB quota boundary.
 
 ### A concrete invocation sequence
 
-1. The authenticated web boundary accepts a command such as `activate_case` or `revise_brief`. It derives the tenant and actor identity from authentication, not from the model or an unchecked request body.
-2. A Postgres transaction records the command and an outbox item. The HTTP request returns `202 Accepted` with the command ID. Acceptance means the command is durable, not that a quote or booking exists.
-3. The dispatcher delivers the command at least once to the case coordinator. The coordinator obtains the current case revision and identifies the next deterministic action.
+1. The authenticated web boundary accepts a command such as `activate` or `revise_brief`. It derives the tenant and actor identity from authentication, not from the model or an unchecked request body.
+2. A Postgres transaction records the command receipt; the decision transaction commits business updates, events and outbox intents atomically. The HTTP request returns `202 Accepted` with the command ID. Acceptance means the command is durable, not that a quote or booking exists.
+3. The coordinator claims emitted intents at least once; a leased intent may be redelivered. A repeated command is handled by the Postgres command ledger, not by sending the command through the outbox again. The coordinator obtains the current case revision and identifies the next deterministic action.
 4. If reasoning is needed, the coordinator records an agent-job specification and a stable submission request ID. The job contains the exact case revision, task purpose, permitted inputs, tool profile, deadline, model policy and execution allowance.
 5. Backend code obtains the Pi actor by `[tenantId, caseId, jobId]` and invokes its **`submit` action**, passing the same `requestId` on every transport retry. `submit` returns a submission ID without holding the original customer request open.
 6. Pi runs its model/tool loop. The selected tools can read the scoped case snapshot, inspect permitted event/supply data, and produce a structured candidate. The initial tool profile has no shell, arbitrary HTTP, booking, payment, or unrestricted database tool.
-7. The coordinator observes completion, validates the structured result, and commits it only if the tenant, case, job and expected revision still match. A result from an older brief is recorded as stale; it cannot replace newer work.
+7. The job actor returns a candidate to the coordinator; tools read scoped data only — neither the job actor nor its tools write authoritative business state directly. The coordinator observes completion, validates the structured result, and commits it only if the tenant, case, job and expected revision still match. A result from an older brief is recorded as stale; it cannot replace newer work.
 8. The customer reads persisted progress. A lost browser connection or a missed streaming update does not lose the case.
 
-The SDK invocation form is documented by [Rivet's Pi integration](https://rivet.dev/ecosystem/pi-durable/): `handle.submit(text, { requestId })` starts work; `handle.prompt(text, { requestId })` also waits. A caller timeout does **not** cancel the run. Explicit conversation abort is required, and a business cancellation must also fence late results and future external actions. The local `verify:harness` command exercises the installed SDK; application command and database paths above are the next integration work.
+The SDK invocation form is documented by [Rivet's Pi integration](https://rivet.dev/ecosystem/pi-durable/): `handle.submit(text, { requestId })` starts work; `handle.prompt(text, { requestId })` also waits. A caller timeout does **not** cancel the run. Explicit conversation abort is required, and a business cancellation must also fence late results and future external actions. The local verify:harness exercises the SDK. The Postgres command path also exists; the authenticated HTTP boundary and the host invocation connecting it to Pi do not.
 
 Do not call `spawn("pi", ...)` per web request. That would give the application a CLI lifecycle and working directory to manage while bypassing the selected actor/session integration. CLI, RPC and SDK are invocation choices, not substitutes for the application's authorization and commercial state.
 
@@ -122,7 +123,7 @@ stateDiagram-v2
     Proposal --> Closed: cancelled or expired
 ```
 
-An unresolved external obligation stays in reconciliation. Recording uncertainty is not enough to close it. This diagram summarizes business progression. The pure reference model lives in `packages/domain/src/case-lifecycle.ts`; it demonstrates one component and does not replace a transactional repository. Multi-component partial success must be implemented explicitly before assisted commercial use.
+An unresolved external obligation stays in the `reconciliation` waiting reason. Recording uncertainty is not enough to close it. This diagram summarizes business progression. The pure reference model lives in `packages/domain/src/case-lifecycle.ts`; it demonstrates one component and does not replace a transactional repository. Multi-component partial success must be implemented explicitly before assisted commercial use.
 
 ## Recovery has two different meanings
 
@@ -141,13 +142,13 @@ An unresolved external obligation stays in reconciliation. Recording uncertainty
 | A completion callback is missed                           | Reconcile the persisted agent-job/submission status; callbacks are notifications, not the only result store |
 | Deployment changes the harness schema                     | Qualify forward migration and in-flight recovery; do not assume an old binary can reopen newer checkpoints  |
 
-For purchase dispatch, the critical sequence is: commit intent → contact provider → commit receipt. There is no transaction spanning Postgres and the supplier. A timeout between the latter two steps produces uncertainty. Only a provider capability, a stable idempotency key, or evidence-based reconciliation can safely resolve it.
+For purchase dispatch, the critical sequence is: commit intent → contact provider → commit receipt. There is no transaction spanning Postgres and the supplier. A timeout between the latter two steps produces uncertainty. A stable idempotency key alone does not resolve it. A positive lookup can confirm the original action. Nonexecution requires the persisted fence for that exact attempt plus fresh terminal evidence; without it the action stays unresolved.
 
 ## Scope, limits and telemetry
 
 Every job needs `tenantId`, `caseId`, `jobId`, `baseRevision`, purpose, allowed tools, deadline, model policy and allowance. Store these server-side. The model cannot change them. Before every externally meaningful action, check current cancellation, authority, quote validity and budget again.
 
-The qualification harness uses a scripted model provider to exercise the real SDK without paid inference. Production model selection, cumulative case-budget reservation, usage settlement and tenant authorization remain integration gates. A maximum output-token setting alone is not a case budget; retries, parallel jobs, tool fees and uncertain model spend must be counted.
+The qualification harness uses a scripted model provider to exercise the real SDK without paid inference. Per-task and per-case usage allowances are implemented in the Postgres usage ledger and enforced by the coordinator in local tests, but paid-model pricing, monetary settlement and the production Pi adapter wiring remain unproven integration gates. A maximum output-token setting alone is not a case budget; retries, parallel jobs, tool fees and uncertain model spend must be counted.
 
 Trace identifiers link customer command → case revision → agent job/submission → tool call → external action → provider receipt. A client-visible timeline is a filtered projection of these records. It must not expose raw transcripts, private supplier rates, credentials or another partner's customer history.
 

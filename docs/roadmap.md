@@ -14,6 +14,8 @@ Targets are measured from the initial development baseline. Dates are planning c
 
 The week-2 PoC is deliberately narrower than the assisted release. Runtime and harness proofs use a scripted model provider and synthetic supply; they require no paid inference, sandbox service, production booking credentials, or polished interface. The narrow integrated scenario is specified in the [engineering handoff](implementation-handoff.md). Its minimum brief/RFQ/proposal path must be pulled forward from the later business tasks so that week 2 proves one case, while broader coverage and customer interaction remain later work.
 
+**Local integration evidence:** the durable foundation (Postgres case store, service-case coordinator, usage ledger, effect dispatcher with a synthetic supplier, and quota ledger) is merged at `6112523` with [passing CI](https://github.com/nextexcite/occavoy/actions/runs/45982258175/job/140448854845) on the identical tree. This is week-2 local integration evidence only: it is not a cloud deployment, not partner outreach, and not the week-4 demonstration. It does not complete the week-2 end-to-end gate; OCA-34 acceptance remains open. The gates and dates above are unchanged.
+
 ## Sequence
 
 ### Weeks 1–2: prove the execution and commercial boundaries
