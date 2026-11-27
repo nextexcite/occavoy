@@ -12,10 +12,19 @@ export class ReservationSizeMismatchError extends Error {
   }
 }
 
-async function transaction<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {
+async function budgetTransaction<T>(
+  pool: Pool,
+  work: (client: PoolClient) => Promise<T>,
+): Promise<T> {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+    // Serialize admission and quarantine on the same row. The next statement gets
+    // a fresh snapshot even when acquiring this lock had to wait.
+    const budget = await client.query(
+      "SELECT id FROM object_budget WHERE id = 'occavoy' FOR UPDATE",
+    );
+    if (!budget.rowCount) throw new Error("Missing quota budget");
     const result = await work(client);
     await client.query("COMMIT");
     return result;
@@ -58,7 +67,7 @@ export class PostgresQuotaLedger implements DurableQuotaLedger {
     const limit = Math.min(cap, R2_CAPACITY_BYTES);
     if (request.bytes > limit) return false;
     try {
-      return await transaction(this.pool, async (client) => {
+      return await budgetTransaction(this.pool, async (client) => {
         const inserted = await client.query(
           `INSERT INTO object_reservation (id, object_key, bytes, state, expires_at)
            VALUES ($1, $2, $3, 'reserved', now() + $4 * interval '1 millisecond') ON CONFLICT DO NOTHING`,
@@ -83,7 +92,7 @@ export class PostgresQuotaLedger implements DurableQuotaLedger {
   }
 
   async commit(id: string, actualBytes?: number): Promise<void> {
-    const mismatch = await transaction(this.pool, async (client) => {
+    const mismatch = await budgetTransaction(this.pool, async (client) => {
       const row = await lockReservation(client, id);
       if (row.state === "committed") return;
       if (row.state === "released") throw new Error("Cannot commit a released reservation");
@@ -116,17 +125,19 @@ export class PostgresQuotaLedger implements DurableQuotaLedger {
   }
 
   async markUnknown(id: string, note?: string): Promise<void> {
-    await this.pool.query(
-      `UPDATE object_reservation SET state = 'unknown', reconciliation_note = $2,
-      updated_at = now() WHERE id = $1 AND state = 'reserved'`,
-      [id, note ?? null],
-    );
+    await budgetTransaction(this.pool, async (client) => {
+      await client.query(
+        `UPDATE object_reservation SET state = 'unknown', reconciliation_note = $2,
+        updated_at = now() WHERE id = $1 AND state = 'reserved'`,
+        [id, note ?? null],
+      );
+    });
   }
 
   /** Caller has independently established absence and that no in-flight write can still land. */
   async releaseVerifiedAbsent(id: string, note: string): Promise<void> {
     if (!note.trim()) throw new Error("Absence verification note required");
-    await transaction(this.pool, async (client) => {
+    await budgetTransaction(this.pool, async (client) => {
       const row = await lockReservation(client, id);
       if (row.state === "released") return;
       if (row.state === "committed") throw new Error("Cannot release a committed reservation");

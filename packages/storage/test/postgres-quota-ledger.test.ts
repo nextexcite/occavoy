@@ -17,6 +17,7 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
   let admin: pg.Pool;
   let pool: pg.Pool;
   let schema: string;
+  let scopedConnectionString: string;
   let ledger: PostgresQuotaLedger;
 
   beforeEach(async () => {
@@ -27,7 +28,8 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
     await admin.query("CREATE SCHEMA " + pg.escapeIdentifier(schema));
     const scopedUrl = new URL(databaseUrl ?? "");
     scopedUrl.searchParams.set("options", `-c search_path=${schema}`);
-    pool = new pg.Pool({ connectionString: scopedUrl.href });
+    scopedConnectionString = scopedUrl.href;
+    pool = new pg.Pool({ connectionString: scopedConnectionString });
     expect((await pool.query("SELECT current_schema() AS schema")).rows[0]?.schema).toBe(schema);
     await applyMigrations(pool);
     ledger = new PostgresQuotaLedger(pool);
@@ -188,5 +190,76 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
       "UPDATE object_budget SET committed_bytes = 6, reserved_bytes = 6 WHERE id = 'occavoy'",
     );
     expect((await ledger.getBudgetReport()).discrepancyBytes).toBe(2);
+  });
+
+  it("blocks admission behind a quarantine write waiting on the budget lock", async () => {
+    await ledger.reserve(request("oversized-observed", 4));
+    const mismatchPool = new pg.Pool({ connectionString: scopedConnectionString, max: 1 });
+    const admissionPool = new pg.Pool({ connectionString: scopedConnectionString, max: 1 });
+    const blocker = await pool.connect();
+    let blockerReleased = false;
+    const releaseBlocker = async () => {
+      if (blockerReleased) return;
+      blockerReleased = true;
+      try {
+        await blocker.query("ROLLBACK");
+      } finally {
+        blocker.release();
+      }
+    };
+    try {
+      const mismatchPid = (await mismatchPool.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      const admissionPid = (await admissionPool.query("SELECT pg_backend_pid() AS pid")).rows[0]
+        .pid;
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT id FROM object_budget WHERE id = 'occavoy' FOR UPDATE");
+      const mismatchJob = new PostgresQuotaLedger(mismatchPool)
+        .commit("oversized-observed", 5)
+        .catch((error: unknown) => error);
+      await vi.waitFor(
+        async () => {
+          expect(
+            (
+              await admin.query("SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked", [
+                mismatchPid,
+              ])
+            ).rows[0].blocked,
+          ).toBe(true);
+        },
+        { timeout: 1500, interval: 15 },
+      );
+      const put = vi.fn(async () => ({ size: 1 }));
+      const admissionJob = new GuardedObjectStore({ put }, new PostgresQuotaLedger(admissionPool))
+        .putNew("queued-upload", new Uint8Array(1))
+        .catch((error: unknown) => error);
+      await vi.waitFor(
+        async () => {
+          expect(
+            (
+              await admin.query("SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked", [
+                admissionPid,
+              ])
+            ).rows[0].blocked,
+          ).toBe(true);
+        },
+        { timeout: 1500, interval: 15 },
+      );
+      await releaseBlocker();
+      expect(await mismatchJob).toBeInstanceOf(ReservationSizeMismatchError);
+      expect(await admissionJob).toBeInstanceOf(CapacityExceeded);
+      expect(put).not.toHaveBeenCalled();
+      expect(await reservation("queued-upload")).toBeUndefined();
+      expect(await ledger.getBudgetReport()).toMatchObject({
+        reservedBytes: 4,
+        committedBytes: 0,
+        unknownReservations: 1,
+      });
+      await ledger.commit("oversized-observed", 4);
+      expect(await ledger.reserve(request("post-quarantine", 1))).toBe(true);
+    } finally {
+      await releaseBlocker();
+      await mismatchPool.end();
+      await admissionPool.end();
+    }
   });
 });
