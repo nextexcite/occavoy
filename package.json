@@ -17,7 +17,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "check:python": "uv run ruff check experiments scripts && uv run ruff format --check experiments scripts && uv run --package occavoy-evals pytest experiments/evals/tests scripts/tests",
+    "check:python": "uv run ruff check experiments scripts && uv run ruff format --check experiments scripts && uv run --package occavoy-evals pytest experiments/evals/tests",
     "verify:runtime": "pnpm --filter @occavoy/runtime verify:restart",
     "verify:harness": "pnpm --filter @occavoy/runtime verify:harness",
     "demo:lifecycle": "node --import tsx scripts/demo-case-lifecycle.ts",
