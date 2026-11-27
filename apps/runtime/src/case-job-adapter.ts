@@ -75,21 +75,33 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new JobAbortedError();
 }
 
-function validRequirement(value: unknown, seen: Set<string>): value is ResourceRequirement {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const requirement = value as Record<string, unknown>;
+function parseRequirement(value: unknown, seen: Set<string>): ResourceRequirement | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const id = input.id;
+  const rawCategory = input.category;
+  const description = input.description;
   if (
-    typeof requirement.id !== "string" ||
-    requirement.id.trim().length === 0 ||
-    seen.has(requirement.id) ||
-    !["event_access", "accommodation", "transport"].includes(String(requirement.category)) ||
-    typeof requirement.description !== "string" ||
-    requirement.description.trim().length === 0
+    typeof id !== "string" ||
+    id.trim().length === 0 ||
+    seen.has(id) ||
+    typeof description !== "string" ||
+    description.trim().length === 0
   ) {
-    return false;
+    return null;
   }
-  seen.add(requirement.id);
-  return true;
+  let category: ResourceRequirement["category"];
+  switch (rawCategory) {
+    case "event_access":
+    case "accommodation":
+    case "transport":
+      category = rawCategory;
+      break;
+    default:
+      return null;
+  }
+  seen.add(id);
+  return { id, category, description };
 }
 
 /** Explicit production-boundary validation; never cast a harness/probe result directly. */
@@ -103,32 +115,57 @@ export function validateAgentTaskCandidate(value: unknown): AgentTaskCandidate {
     throw new CandidateValidationError("Candidate task must be an object");
   }
   const t = task as Record<string, unknown>;
+  const taskId = t.taskId;
+  const tenantId = t.tenantId;
+  const caseId = t.caseId;
+  const briefVersion = t.briefVersion;
+  const caseRevision = t.caseRevision;
+  const maxModelCalls = t.maxModelCalls;
+  const maxToolCalls = t.maxToolCalls;
+  const deadline = t.deadline;
   const validTask =
-    typeof t.taskId === "string" &&
-    t.taskId.trim().length > 0 &&
-    typeof t.tenantId === "string" &&
-    t.tenantId.trim().length > 0 &&
-    typeof t.caseId === "string" &&
-    t.caseId.trim().length > 0 &&
-    Number.isSafeInteger(t.briefVersion) &&
-    Number(t.briefVersion) >= 1 &&
-    Number.isSafeInteger(t.caseRevision) &&
-    Number(t.caseRevision) >= 0 &&
-    Number.isSafeInteger(t.maxModelCalls) &&
-    Number(t.maxModelCalls) >= 1 &&
-    Number.isSafeInteger(t.maxToolCalls) &&
-    Number(t.maxToolCalls) >= 0 &&
-    typeof t.deadline === "string" &&
-    Number.isFinite(Date.parse(t.deadline));
+    typeof taskId === "string" &&
+    taskId.trim().length > 0 &&
+    typeof tenantId === "string" &&
+    tenantId.trim().length > 0 &&
+    typeof caseId === "string" &&
+    caseId.trim().length > 0 &&
+    Number.isSafeInteger(briefVersion) &&
+    Number(briefVersion) >= 1 &&
+    Number.isSafeInteger(caseRevision) &&
+    Number(caseRevision) >= 0 &&
+    Number.isSafeInteger(maxModelCalls) &&
+    Number(maxModelCalls) >= 1 &&
+    Number.isSafeInteger(maxToolCalls) &&
+    Number(maxToolCalls) >= 0 &&
+    typeof deadline === "string" &&
+    Number.isFinite(Date.parse(deadline));
   if (!validTask) throw new CandidateValidationError("Candidate task fence is invalid");
   if (!Array.isArray(candidate.requirements) || candidate.requirements.length === 0) {
     throw new CandidateValidationError("Candidate requirements must be a non-empty array");
   }
   const seen = new Set<string>();
-  if (!candidate.requirements.every((requirement) => validRequirement(requirement, seen))) {
-    throw new CandidateValidationError("Candidate requirements are invalid or duplicated");
+  const requirements: ResourceRequirement[] = [];
+  for (const input of candidate.requirements) {
+    const requirement = parseRequirement(input, seen);
+    if (!requirement) {
+      throw new CandidateValidationError("Candidate requirements are invalid or duplicated");
+    }
+    requirements.push(requirement);
   }
-  return value as AgentTaskCandidate;
+  return {
+    task: {
+      taskId,
+      tenantId,
+      caseId,
+      briefVersion: Number(briefVersion),
+      caseRevision: Number(caseRevision),
+      maxModelCalls: Number(maxModelCalls),
+      maxToolCalls: Number(maxToolCalls),
+      deadline,
+    },
+    requirements,
+  };
 }
 
 function validateCandidateFence(candidate: AgentTaskCandidate, spec: AgentJobSpec): void {
