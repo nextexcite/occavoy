@@ -496,6 +496,14 @@ export class PostgresCaseStore {
       if (cas.rowCount === 0) {
         throw new Error("concurrent_case_revision_conflict");
       }
+      if (next.phase === "closed") {
+        await client.query(
+          `UPDATE case_allowances
+           SET status = 'closed', pause_reason = NULL, updated_at = now()
+           WHERE tenant_id = $1 AND case_id = $2`,
+          [tenantId, row.caseId],
+        );
+      }
       await this.persistImmutableRecords(client, before, next, command);
       await client.query(
         `INSERT INTO case_domain_events
@@ -724,9 +732,10 @@ export class PostgresCaseStore {
   /** Claims due pending intents for dispatch. FOR UPDATE SKIP LOCKED makes claims race-safe. */
   async claimPendingOutbox(
     limit: number,
-    filter?: { tenantId?: string },
+    filter?: { tenantId?: string; caseId?: string },
   ): Promise<CaseOutboxRow[]> {
     const tenantId = filter?.tenantId ?? null;
+    const caseId = filter?.caseId ?? null;
     const result = await this.pool.query(
       `UPDATE case_outbox
        SET status = 'dispatched', attempts = attempts + 1, dispatched_at = now()
@@ -735,14 +744,36 @@ export class PostgresCaseStore {
          WHERE status = 'pending'
            AND available_at <= now()
            AND ($2::text IS NULL OR tenant_id = $2)
+           AND ($3::text IS NULL OR case_id = $3)
          ORDER BY available_at, id
          LIMIT $1
          FOR UPDATE SKIP LOCKED
        )
        RETURNING ${OUTBOX_COLUMNS}`,
-      [limit, tenantId],
+      [limit, tenantId, caseId],
     );
     return result.rows.map(outboxRow);
+  }
+
+  /**
+   * Recovery gate for a dispatch claim lost with its process. Idempotent receivers
+   * must still fence duplicates; this only restores at-least-once delivery.
+   */
+  async requeueStaleDispatchedOutbox(
+    staleBefore: Date,
+    filter?: { tenantId?: string; caseId?: string },
+  ): Promise<number> {
+    const result = await this.pool.query(
+      `UPDATE case_outbox
+       SET status = 'pending', available_at = now()
+       WHERE status = 'dispatched'
+         AND dispatched_at IS NOT NULL
+         AND dispatched_at < $1
+         AND ($2::text IS NULL OR tenant_id = $2)
+         AND ($3::text IS NULL OR case_id = $3)`,
+      [staleBefore, filter?.tenantId ?? null, filter?.caseId ?? null],
+    );
+    return result.rowCount ?? 0;
   }
 
   async completeOutbox(outboxId: string): Promise<void> {

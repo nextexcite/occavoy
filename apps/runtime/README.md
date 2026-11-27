@@ -1,11 +1,22 @@
 # Occavoy runtime qualification fixtures
 
-This package contains two real Rivet 3.1.1 integrations with synthetic data:
+This package contains two real Rivet 3.1.1 qualification fixtures with synthetic data, plus the initial production-shaped service-case slice:
 
 - **`demoCase`** is the earlier command/workflow probe. It waits for client input, supports pause/resume, and prevents duplicate commands from applying twice. Its native queue API is deprecated and remains an isolated compatibility fixture.
 - **`reasoningProbe`** uses the official `@rivet-dev/pi` adapter and Pi Durable inside an Actor. Its scripted model provider drives the actual model/tool loop and persisted tool tasks. It proves harness invocation and recovery without purchasing model calls.
+- **`serviceCase`** is the deterministic case coordinator. Postgres is the authority for case state, commands, domain events, outbox intents, and usage; actor SQLite storage is limited to a recoverable drain schedule receipt.
 
-Neither fixture books, charges, contacts a supplier, or creates a sandbox. Actor-local demonstration records are not the production ServiceCase authority: commercial records remain intended for Postgres. Use synthetic text only. The test credentials are not production tenant authentication.
+Neither fixture books, charges, contacts a supplier, or creates a sandbox. The service-case slice does not invent inventory, supplier access, or verified prices. Actor-local demonstration records are not the production ServiceCase authority. Use synthetic text only. The test credentials are not production tenant authentication.
+
+## Service-case authority slice
+
+`serviceCase` uses supported Rivet actor actions and scheduling, not the legacy queue API. `PostgresCaseStore` accepts or completes commands transactionally with domain events and outbox intents. The coordinator claims due outbox rows with database locking, starts bounded job adapters, requeues stale dispatch claims, and leaves supplier waiting as durable state rather than holding a model loop open. `supplier_handoff` remains outside this slice and is rejected until its effect dispatcher exists.
+
+`CaseJobAdapter` is the typed boundary for bounded reasoning jobs. Its immutable job specification carries tenant, case, task, request ID, base case revision, brief version, deadline, purpose, and tool profile. The Pi hook uses the `[tenantId, caseId, jobId]` actor key and must retry transport failures with the original request ID. Raw model output is never cast directly to a domain candidate: the adapter validates the candidate shape and exact job fence, then submits one `agent_candidate` command through Postgres. Cancellation aborts local work promptly and exposes an idempotent Pi cancellation hook; late candidates are still subject to the domain revision fence.
+
+`PostgresUsageLedger` reserves model/tool usage before paid steps. Its counters are stored in `case_allowances`; every admitted or denied attempt is attributed in `case_usage_ledger` with a cost category. Exhaustion atomically pauses the case allowance with `budget_exhausted`, blocking further discretionary paid work while still permitting controlled `reconciliation_lookup` attribution for existing unknown obligations. Closing a case closes only that case allowance, not the customer relationship.
+
+The runtime build typechecks and then bundles the runtime with first-party workspace TypeScript into `dist` using esbuild. Versioned third-party runtime dependencies remain external, so the production image does not execute TypeScript sources from `node_modules`.
 
 ## Durable reasoning probe
 
@@ -67,6 +78,7 @@ mise install
 mise exec -- pnpm install --frozen-lockfile
 export OCCAVOY_RUNTIME_MODE=local
 export OCCAVOY_RUNTIME_DEMO_TOKEN="$(openssl rand -hex 32)"
+export DATABASE_URL="postgres://USER:PASSWORD@HOST:PORT/DATABASE"
 mise exec -- pnpm --filter @occavoy/runtime dev
 ```
 
@@ -84,9 +96,9 @@ mise exec -- pnpm --filter @occavoy/runtime verify:restart
 mise exec -- pnpm --filter @occavoy/runtime verify:harness
 ```
 
-The automated SQLite tests cover accepted-command persistence after reopening a database, transactional rollback at the state/result boundary, duplicate/conflicting input, concurrent duplicate receipts, pause/resume, and fail-closed production configuration. They do not substitute for the real Rivet integration check. `verify:restart` starts a local native runtime, prepares a paused case, replaces its process using SIGTERM, and resumes the same case. It generates an in-memory credential and temporary checkpoint, and requires no separately running development server. This proves neither abrupt-failure recovery nor Cloud operation.
+The automated SQLite tests cover accepted-command persistence after reopening a database, transactional rollback at the state/result boundary, duplicate/conflicting input, concurrent duplicate receipts, pause/resume, and fail-closed production configuration. When `DATABASE_URL` is present, the service-case tests additionally cover Postgres-backed supplier waiting, replacement-coordinator recovery, duplicate delivery, cancellation/revision fencing, pre-dispatch stale-task fencing, budget exhaustion, reconciliation lookup attribution, and follow-up case allowances. They do not substitute for the real Rivet integration check. `verify:restart` starts a local native runtime, prepares a paused case, replaces its process using SIGTERM, and resumes the same case. It generates an in-memory credential and temporary checkpoint, and requires no separately running development server. This proves neither abrupt-failure recovery nor Cloud operation.
 
-Observed on **2026-11-27** with Node **26.13.1**, TypeScript **7.0.2** and RivetKit **3.1.1**: typecheck/build passed, all **5 SQLite tests** passed, and the real local `verify:restart` check passed. The recovered `demoCase` retained its paused revision before continuing; duplicate application, conflicting command rejection and failed authentication were also checked. This legacy fixture checks SIGTERM replacement. The separate reasoning probe's SIGKILL evidence is described above. Docker image construction, Rivet Cloud deployment, machine loss, real provider side effects, production tenant isolation and backup restoration remain unverified.
+Observed on **2026-11-27** with Node **26.13.1**, TypeScript **7.0.2** and RivetKit **3.1.1**: typecheck/build passed, all **10 runtime Node tests** passed with local Postgres, and the real local `verify:restart` check passed. The recovered `demoCase` retained its paused revision before continuing; duplicate application, conflicting command rejection and failed authentication were also checked. This legacy fixture checks SIGTERM replacement. The separate reasoning probe's SIGKILL evidence is described above. Docker image construction, Rivet Cloud deployment, machine loss, real provider side effects, production tenant isolation and backup restoration remain unverified.
 
 With the runtime running, `verify:live` exercises the real actor, workflow wait, pause/resume, duplicate handling and unauthorized access. Its default mode does not claim a restart occurred. To check recovery across a runtime restart:
 
