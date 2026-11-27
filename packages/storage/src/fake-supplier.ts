@@ -10,9 +10,13 @@ export interface SupplierCapabilityDeclaration {
   supportsCancel: boolean;
 }
 
-export interface HandoffRequest {
-  actionId: string;
+export interface HandoffAttempt {
   clientReference: string;
+  attempt: number;
+}
+
+export interface HandoffRequest extends HandoffAttempt {
+  actionId: string;
   requestHash: string;
   proposalId: string;
   proposalVersion: number;
@@ -28,6 +32,10 @@ export interface SupplierAdapter {
   readonly capabilities: SupplierCapabilityDeclaration;
   submitHandoff(request: HandoffRequest): Promise<{ providerReference: string }>;
   lookupByClientReference(clientReference: string): Promise<SupplierLookup>;
+  /** Optional supplier-side fence. On success no send through this attempt (including
+   * an in-flight request) can subsequently create an order. Already accepted orders
+   * remain visible to reconciliation. A local lease timeout is not such a fence. */
+  fenceHandoffAttempt?(target: HandoffAttempt): Promise<{ evidenceRef: string }>;
 }
 
 export class UnsupportedCapabilityError extends Error {}
@@ -39,6 +47,7 @@ export class FakeSupplierAdapter implements SupplierAdapter {
     string,
     { request: HandoffRequest; providerReference: string }[]
   >();
+  private readonly fencedThrough = new Map<string, number>();
   private created = 0;
   submitCalls = 0;
 
@@ -52,8 +61,16 @@ export class FakeSupplierAdapter implements SupplierAdapter {
     return this.created;
   }
 
+  async fenceHandoffAttempt({ clientReference, attempt }: HandoffAttempt) {
+    const previous = this.fencedThrough.get(clientReference) ?? 0;
+    this.fencedThrough.set(clientReference, Math.max(previous, attempt));
+    return { evidenceRef: `synthetic:sender-fenced:${clientReference}:${attempt}` };
+  }
+
   async submitHandoff(request: HandoffRequest) {
     this.submitCalls++;
+    if (request.attempt <= (this.fencedThrough.get(request.clientReference) ?? 0))
+      throw new Error("synthetic:attempt-fenced");
     if (this.fault === "rejectBeforeAccept") throw new Error("synthetic:connection-refused");
     const orders = this.orders.get(request.clientReference) ?? [];
     const existing = orders[0];

@@ -161,6 +161,7 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
     });
     const unknown = await dispatcher.dispatchApprovedHandoff(input);
     expect(spy).toHaveBeenCalledWith({
+      attempt: 1,
       actionId: input.actionId,
       clientReference: input.clientReference,
       requestHash: input.requestHash,
@@ -322,6 +323,122 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
     });
     expect((await state()).action?.status).toBe("confirmed");
     expect(supplier.submitCalls).toBe(1);
+    expect(supplier.orderCount).toBe(1);
+  });
+
+  it.each(["retry", "close"] as const)(
+    "recovers a commit-before-send crash for explicit %s",
+    async (resolution) => {
+      const { input, supplier, dispatcher, state, apply } = await setup("none");
+      const submit = store.submitCommand.bind(store);
+      const crash = vi
+        .spyOn(store, "submitCommand")
+        .mockImplementationOnce(async (command, ctx) => {
+          const intent = await submit(command, ctx);
+          expect(intent.decision.outcome).toBe("applied");
+          throw new Error("synthetic:crash-after-commit");
+        });
+      try {
+        await expect(dispatcher.dispatchApprovedHandoff(input)).rejects.toThrow(
+          "synthetic:crash-after-commit",
+        );
+      } finally {
+        crash.mockRestore();
+      }
+      expect(await state()).toMatchObject({ action: { status: "dispatching", attempts: 1 } });
+      expect(supplier.submitCalls).toBe(0);
+      const recovered = new DeterministicEffectDispatcher(new PostgresCaseStore(pool), supplier);
+      const target = { ...input, attempt: 1 };
+      await expect(recovered.reconcileUnknownAction(input)).rejects.toThrow(
+        "dispatch_still_in_flight",
+      );
+      await expect(
+        recovered.recordOperatorReconciliation({
+          ...input,
+          result: "not_executed",
+          providerReference: null,
+          evidenceRef: "synthetic:negative",
+        }),
+      ).rejects.toThrow("dispatch_still_in_flight");
+      await expect(recovered.retryApprovedHandoff(target)).rejects.toThrow(
+        "reconciliation_required",
+      );
+      vi.spyOn(supplier, "fenceHandoffAttempt").mockRejectedValueOnce(
+        new Error("fence unavailable"),
+      );
+      await expect(recovered.recoverInterruptedDispatch(target)).rejects.toThrow(
+        "fence unavailable",
+      );
+      expect((await state()).action?.status).toBe("dispatching");
+      await expect(recovered.recoverInterruptedDispatch(target)).resolves.toMatchObject({
+        action: {
+          status: "unknown",
+          evidenceRefs: [`synthetic:sender-fenced:${input.clientReference}:1`],
+        },
+      });
+      await expect(recovered.retryApprovedHandoff(target)).rejects.toThrow(
+        "reconciliation_required",
+      );
+      await expect(recovered.reconcileUnknownAction(input)).resolves.toMatchObject({
+        action: {
+          status: "not_executed",
+          reconciliationEvidence: [{ result: "not_executed", source: "provider_lookup" }],
+        },
+      });
+      expect(supplier.orderCount).toBe(0);
+      if (resolution === "retry") {
+        await expect(recovered.retryApprovedHandoff(target)).resolves.toMatchObject({
+          action: {
+            status: "confirmed",
+            attempts: 2,
+            clientReference: input.clientReference,
+            requestHash: input.requestHash,
+          },
+        });
+        expect(supplier.orderCount).toBe(1);
+        expect(supplier.submitCalls).toBe(1);
+      } else {
+        expect(await apply({ kind: "close", outcome: "unavailable" })).toMatchObject({
+          phase: "closed",
+        });
+        expect(supplier.submitCalls).toBe(0);
+      }
+    },
+  );
+
+  it("a sender paused before acceptance cannot place its order after the fence", async () => {
+    const { input, supplier, dispatcher } = await setup("none", false);
+    let signalPaused!: () => void;
+    let resume!: () => void;
+    const paused = new Promise<void>((resolve) => {
+      signalPaused = resolve;
+    });
+    const resumed = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const send = supplier.submitHandoff.bind(supplier);
+    vi.spyOn(supplier, "submitHandoff").mockImplementationOnce(async (request) => {
+      signalPaused();
+      await resumed;
+      return send(request);
+    });
+    const oldSender = dispatcher.dispatchApprovedHandoff(input);
+    await paused;
+    const target = { ...input, attempt: 1 };
+    try {
+      await dispatcher.recoverInterruptedDispatch(target);
+      await dispatcher.recordOperatorReconciliation({
+        ...input,
+        result: "not_executed",
+        providerReference: null,
+        evidenceRef: "synthetic:operator-verified-absent",
+      });
+      await dispatcher.retryApprovedHandoff(target);
+    } finally {
+      resume();
+    }
+    await expect(oldSender).rejects.toThrow("action_attempt_changed");
+    expect(supplier.submitCalls).toBe(2);
     expect(supplier.orderCount).toBe(1);
   });
 

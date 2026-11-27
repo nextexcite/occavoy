@@ -26,8 +26,23 @@ export class DeterministicEffectDispatcher {
     private readonly supplier: SupplierAdapter,
   ) {}
 
-  async dispatchApprovedHandoff(
-    input: ActionContext & { clientReference: string; requestHash: string },
+  dispatchApprovedHandoff(input: ActionContext & { clientReference: string; requestHash: string }) {
+    return this.dispatch(input, {
+      kind: "dispatch_handoff",
+      actionId: input.actionId,
+      clientReference: input.clientReference,
+      requestHash: input.requestHash,
+    });
+  }
+
+  retryApprovedHandoff(input: ActionContext & { attempt: number }) {
+    return this.dispatch(input, { kind: "retry_handoff", actionId: input.actionId }, input.attempt);
+  }
+
+  private async dispatch(
+    input: ActionContext,
+    command: Extract<CaseCommandBody, { kind: "dispatch_handoff" | "retry_handoff" }>,
+    previousAttempt?: number,
   ) {
     // Both post-call outcomes must be recordable before we make an irreversible call.
     const state = await this.readCase(input, [
@@ -51,20 +66,18 @@ export class DeterministicEffectDispatcher {
       throw new Error("supplier_scope_mismatch");
     }
 
-    // Under the case lock, the reducer checks this revision, exact approval terms,
-    // expiry, cancellation and the absence of any previous action, then emits intent.
-    const intent = await this.submit(input, state.revision, {
-      kind: "dispatch_handoff",
-      actionId: input.actionId,
-      clientReference: input.clientReference,
-      requestHash: input.requestHash,
-    });
+    // A delayed retry request must not authorize a later attempt. The reducer
+    // checks nonexecution, approval and cancellation under this revision's CAS.
+    if (command.kind === "retry_handoff" && state.action?.attempts !== previousAttempt)
+      throw new Error("action_attempt_changed");
+    const intent = await this.submit(input, state.revision, command);
     if (intent.decision.outcome !== "applied") throw new Error(intent.decision.reason);
     if (intent.deduplicated) throw new Error("dispatch_already_received");
     const action = intent.decision.state.action!;
     let observation: Observation;
     try {
       const { providerReference } = await this.supplier.submitHandoff({
+        attempt: action.attempts,
         actionId: action.id,
         clientReference: action.clientReference,
         requestHash: action.requestHash,
@@ -93,6 +106,23 @@ export class DeterministicEffectDispatcher {
     const observed = await this.record(input, action, observation);
     for (const id of intent.outboxIds) await this.store.completeOutbox(id);
     return observed;
+  }
+
+  async recoverInterruptedDispatch(input: ActionContext & { attempt: number }) {
+    const action = await this.readAction(input, ["action.reconcile", "supply.record"]);
+    if (action.attempts !== input.attempt) throw new Error("action_attempt_changed");
+    if (action.status !== "dispatching") throw new Error("action_not_dispatching");
+    if (!this.supplier.fenceHandoffAttempt) throw new Error("dispatch_fence_unavailable");
+    const { evidenceRef } = await this.supplier.fenceHandoffAttempt({
+      clientReference: action.clientReference,
+      attempt: action.attempts,
+    });
+    // The fence revokes the right to send; it says nothing about prior acceptance.
+    return this.record(input, action, {
+      kind: "handoff_unknown",
+      actionId: action.id,
+      evidenceRef,
+    });
   }
 
   async reconcileUnknownAction(input: ActionContext) {
@@ -150,8 +180,11 @@ export class DeterministicEffectDispatcher {
     return state;
   }
 
-  private async readAction(input: ActionContext) {
-    const state = await this.readCase(input, ["action.reconcile"]);
+  private async readAction(
+    input: ActionContext,
+    permissions: CasePermission[] = ["action.reconcile"],
+  ) {
+    const state = await this.readCase(input, permissions);
     const action = state.action;
     if (
       !action ||

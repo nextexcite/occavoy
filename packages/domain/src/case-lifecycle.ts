@@ -721,6 +721,9 @@ export function decideCase(
       ) {
         return stop("action_not_reconcilable");
       }
+      if (current.action.status === "dispatching" && command.result !== "confirmed") {
+        return stop("dispatch_still_in_flight");
+      }
       if (
         !command.evidenceRef.trim() ||
         (command.result === "confirmed" && !command.providerReference?.trim())
