@@ -129,6 +129,10 @@ export class ServiceCaseCoordinator {
     return this.deps.now?.() ?? new Date();
   }
 
+  private outboxLeaseMs(): number {
+    return this.deps.staleDispatchMs ?? 120_000;
+  }
+
   async submitCommand(
     command: CaseCommand,
     authority: CaseAuthority,
@@ -206,6 +210,22 @@ export class ServiceCaseCoordinator {
     };
   }
 
+  /** Next time unfinished outbox work can become claimable, or null when the case is idle. */
+  async nextDrainAt(tenantId: string, caseId: string): Promise<Date | null> {
+    const rows = await this.deps.store.listOutboxForCase(tenantId, caseId);
+    const leaseMs = this.outboxLeaseMs();
+    let next: Date | null = null;
+    for (const row of rows) {
+      let candidate: Date | null = null;
+      if (row.status === "pending") candidate = row.availableAt;
+      if (row.status === "dispatched" && row.dispatchedAt) {
+        candidate = new Date(row.dispatchedAt.getTime() + leaseMs);
+      }
+      if (candidate && (!next || candidate < next)) next = candidate;
+    }
+    return next;
+  }
+
   async recoverCase(tenantId: string, caseId: string): Promise<ServiceCaseRecoverySnapshot> {
     const state = await this.deps.store.getCase(tenantId, caseId);
     const drain = await this.drainCase(tenantId, caseId);
@@ -214,7 +234,7 @@ export class ServiceCaseCoordinator {
   }
 
   private async drainLoop(tenantId: string, caseId: string): Promise<ServiceCaseDrainSummary> {
-    const staleMs = this.deps.staleDispatchMs ?? 120_000;
+    const staleMs = this.outboxLeaseMs();
     const summary: ServiceCaseDrainSummary = {
       claimed: 0,
       completed: 0,
@@ -458,18 +478,33 @@ export function createServiceCaseActor(
     return created;
   };
 
-  async function scheduleDrain(c: {
-    db: RawAccess;
-    schedule: { after(duration: number, action: string, ...args: unknown[]): Promise<string> };
-  }): Promise<void> {
+  async function scheduleDrain(
+    c: {
+      db: RawAccess;
+      schedule: { after(duration: number, action: string, ...args: unknown[]): Promise<string> };
+    },
+    delayMs = 10,
+  ): Promise<void> {
     const now = Date.now();
-    const id = await c.schedule.after(10, "drainScheduled");
+    const id = await c.schedule.after(delayMs, "drainScheduled");
     const state = await readServiceCaseDrainState(c.db);
     await writeServiceCaseDrainState(c.db, {
       ...state,
       drainScheduleId: id,
-      drainScheduledAt: now + 10,
+      drainScheduledAt: now + delayMs,
     });
+  }
+
+  async function scheduleNextDrain(
+    c: {
+      db: RawAccess;
+      schedule: { after(duration: number, action: string, ...args: unknown[]): Promise<string> };
+    },
+    scope: { tenantId: string; caseId: string },
+  ): Promise<void> {
+    const next = await coordinatorFor(scope).nextDrainAt(scope.tenantId, scope.caseId);
+    if (!next) return;
+    await scheduleDrain(c, Math.max(10, next.getTime() - Date.now()));
   }
 
   return actor({
@@ -519,7 +554,9 @@ export function createServiceCaseActor(
       },
       drain: async (c) => {
         const scope = actorScope(c.key);
-        return coordinatorFor(scope).drainCase(scope.tenantId, scope.caseId);
+        const result = await coordinatorFor(scope).drainCase(scope.tenantId, scope.caseId);
+        await scheduleNextDrain(c, scope);
+        return result;
       },
       drainScheduled: async (c) => {
         const scope = actorScope(c.key);
@@ -531,6 +568,7 @@ export function createServiceCaseActor(
         });
         try {
           const result = await coordinatorFor(scope).drainCase(scope.tenantId, scope.caseId);
+          await scheduleNextDrain(c, scope);
           const current = await readServiceCaseDrainState(c.db);
           await writeServiceCaseDrainState(c.db, {
             ...current,
@@ -538,7 +576,7 @@ export function createServiceCaseActor(
           });
           return result;
         } catch (error) {
-          await scheduleDrain(c);
+          await scheduleDrain(c, 1_000);
           throw error;
         }
       },
