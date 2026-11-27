@@ -110,6 +110,16 @@ function validateTaskScope(row: CaseOutboxRow, task: AgentTaskReference): void {
   }
 }
 
+function sameRfq(left: CaseRfq, right: CaseRfq): boolean {
+  return (
+    left.id === right.id &&
+    left.supplierId === right.supplierId &&
+    left.briefVersion === right.briefVersion &&
+    left.requirementIds.length === right.requirementIds.length &&
+    left.requirementIds.every((id, index) => id === right.requirementIds[index])
+  );
+}
+
 /**
  * Deterministic per-case coordinator. Postgres remains the authority; this
  * class only claims committed outbox intents, starts bounded job adapters,
@@ -366,6 +376,19 @@ export class ServiceCaseCoordinator {
     if (!this.deps.requestSupplierQuote) {
       throw new Error("supplier_quote_requester_not_configured");
     }
+    const snapshot = await this.deps.store.getCase(row.tenantId, row.caseId);
+    const currentRfq = snapshot?.rfq ?? null;
+    const current =
+      snapshot &&
+      snapshot.phase === "sourcing" &&
+      snapshot.waitReason === "supplier_quote" &&
+      !snapshot.cancelRequested &&
+      snapshot.outcome === null &&
+      Date.parse(snapshot.deadline) > this.now().getTime() &&
+      currentRfq !== null &&
+      currentRfq.briefVersion === snapshot.brief.version &&
+      sameRfq(currentRfq, rfq);
+    if (!current) return;
     await this.deps.requestSupplierQuote(rfq, {
       tenantId: row.tenantId,
       caseId: row.caseId,

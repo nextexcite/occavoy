@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AgentTaskCandidate,
   CaseAuthority,
@@ -76,6 +77,15 @@ export class CandidateValidationError extends Error {
 
 export function piActorKeyForJob(spec: AgentJobSpec): [string, string, string] {
   return [spec.tenantId, spec.caseId, spec.taskId];
+}
+
+export const MAX_DEADLINE_TIMER_DELAY_MS = 2_147_483_647;
+
+export function agentCandidateCommandId(spec: AgentJobSpec): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify([spec.tenantId, spec.caseId, spec.taskId, spec.requestId]))
+    .digest("hex");
+  return `occavoy-agent-candidate-v1-${digest}`;
 }
 
 function throwIfAborted(signal: AbortSignal): void {
@@ -188,6 +198,8 @@ function validateCandidateFence(candidate: AgentTaskCandidate, spec: AgentJobSpe
   }
 }
 
+type DeadlineTimerHandle = number | NodeJS.Timeout;
+
 export interface CaseJobAdapterDeps {
   store: PostgresCaseStore;
   usageLedger: PostgresUsageLedger;
@@ -196,6 +208,8 @@ export interface CaseJobAdapterDeps {
   runner: CaseJobRunner;
   costCategory?: UsageCostCategory;
   now?: () => Date;
+  scheduleTimeout?: (callback: () => void, delayMs: number) => DeadlineTimerHandle;
+  cancelTimeout?: (handle: DeadlineTimerHandle) => void;
 }
 
 /**
@@ -220,7 +234,24 @@ export class CaseJobAdapter {
     const abortFromCaller = () => controller.abort();
     if (callerSignal.aborted) controller.abort();
     else callerSignal.addEventListener("abort", abortFromCaller, { once: true });
-    const deadlineTimer = setTimeout(() => controller.abort(), Math.max(1, deadlineAt - nowMs()));
+    const scheduleTimeout = this.deps.scheduleTimeout ?? setTimeout;
+    const cancelTimeout = this.deps.cancelTimeout ?? clearTimeout;
+    let deadlineTimer: DeadlineTimerHandle | null = null;
+    const armDeadlineTimer = () => {
+      const remaining = deadlineAt - nowMs();
+      if (remaining <= 0) {
+        controller.abort();
+        return;
+      }
+      deadlineTimer = scheduleTimeout(
+        () => {
+          if (nowMs() >= deadlineAt) controller.abort();
+          else armDeadlineTimer();
+        },
+        Math.min(MAX_DEADLINE_TIMER_DELAY_MS, Math.max(1, remaining)),
+      );
+    };
+    armDeadlineTimer();
     const signal = controller.signal;
     const costCategory = this.deps.costCategory ?? "dev_subscription";
     const throwIfDeadlineExceeded = () => {
@@ -247,6 +278,7 @@ export class CaseJobAdapter {
       });
       if (!reservation.admitted) throw new BudgetExhaustedError();
       throwIfAborted(signal);
+      throwIfDeadlineExceeded();
     };
     try {
       const raw = await this.deps.runner.run(spec, {
@@ -264,7 +296,7 @@ export class CaseJobAdapter {
         {
           kind: "agent_candidate",
           candidate,
-          commandId: `agent-candidate-${spec.taskId}`,
+          commandId: agentCandidateCommandId(spec),
           tenantId: spec.tenantId,
           caseId: spec.caseId,
           expectedRevision: spec.baseRevision,
@@ -291,7 +323,7 @@ export class CaseJobAdapter {
       }
       throw error;
     } finally {
-      clearTimeout(deadlineTimer);
+      if (deadlineTimer !== null) cancelTimeout(deadlineTimer);
       callerSignal.removeEventListener("abort", abortFromCaller);
     }
   }

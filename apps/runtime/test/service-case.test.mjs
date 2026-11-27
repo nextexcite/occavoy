@@ -5,7 +5,9 @@ import { demoEvents } from "@occavoy/domain";
 import { applyMigrations, PostgresCaseStore, PostgresUsageLedger } from "@occavoy/storage";
 import pg from "pg";
 import {
+  agentCandidateCommandId,
   defaultScriptedCandidate,
+  MAX_DEADLINE_TIMER_DELAY_MS,
   PiJobAdapter,
   piActorKeyForJob,
   ScriptedCaseJobAdapter,
@@ -76,6 +78,7 @@ function makeCoordinator({
   supplierRequests,
   cancelCalls,
   staleDispatchMs = 120000,
+  requestSupplierQuote,
 }) {
   return new ServiceCaseCoordinator({
     store,
@@ -100,9 +103,11 @@ function makeCoordinator({
         },
         runnerScript,
       ),
-    requestSupplierQuote: async (rfq) => {
-      if (!supplierRequests.some((id) => id === rfq.id)) supplierRequests.push(rfq.id);
-    },
+    requestSupplierQuote:
+      requestSupplierQuote ??
+      (async (rfq) => {
+        if (!supplierRequests.some((id) => id === rfq.id)) supplierRequests.push(rfq.id);
+      }),
     cancelAgentTask: async (task) => {
       cancelCalls.push(task.taskId);
     },
@@ -155,6 +160,181 @@ test("job adapter does not start an expired job or admit paid work", async () =>
   );
   assert.deepEqual(await adapter.run(spec), { status: "aborted", reason: "deadline_exceeded" });
   assert.equal(invocations, 0);
+});
+
+function jobSpec(overrides = {}) {
+  return {
+    tenantId: "tenant-job",
+    caseId: "case-job",
+    taskId: "task-job",
+    requestId: "task-job",
+    baseRevision: 1,
+    briefVersion: 1,
+    purpose: "derive_requirements",
+    toolProfile: "case_readonly_v1",
+    deadlineAt: "2027-01-01T12:00:10.000Z",
+    maxModelCalls: 1,
+    maxToolCalls: 0,
+    ...overrides,
+  };
+}
+
+function mockClock(startMs = NOW.getTime()) {
+  let now = startMs;
+  let nextId = 1;
+  const timers = new Map();
+  return {
+    now: () => new Date(now),
+    scheduleTimeout: (callback, delayMs) => {
+      const handle = { id: nextId++ };
+      timers.set(handle, { callback, delayMs, due: now + delayMs, cancelled: false });
+      return handle;
+    },
+    cancelTimeout: (handle) => {
+      const timer = timers.get(handle);
+      if (timer) timer.cancelled = true;
+    },
+    advance: (durationMs) => {
+      now += durationMs;
+      for (;;) {
+        const due = [...timers.entries()]
+          .filter(([, timer]) => !timer.cancelled && timer.due <= now)
+          .sort((left, right) => left[1].due - right[1].due)[0];
+        if (!due) return;
+        const [handle, timer] = due;
+        timers.delete(handle);
+        timer.callback();
+      }
+    },
+    activeDelays: () =>
+      [...timers.values()].filter((timer) => !timer.cancelled).map((timer) => timer.delayMs),
+  };
+}
+
+function adapterTestHarness({ clock, reserveUsage, script } = {}) {
+  const submissions = [];
+  const adapter = new ScriptedCaseJobAdapter(
+    {
+      store: {
+        submitCommand: async (command) => {
+          submissions.push(command);
+          return {
+            deduplicated: false,
+            decision: { outcome: "applied", reason: "agent_candidate", state: null, intents: [] },
+          };
+        },
+      },
+      usageLedger: {
+        reserveUsage:
+          reserveUsage ??
+          (async () => ({
+            admitted: true,
+            allowance: {},
+          })),
+      },
+      relationshipIdForJob: async () => "relationship-job",
+      authorityForJob: (spec) => authority(spec.tenantId, spec.caseId, "agent_candidate"),
+      now: clock?.now ?? (() => NOW),
+      ...(clock
+        ? { scheduleTimeout: clock.scheduleTimeout, cancelTimeout: clock.cancelTimeout }
+        : {}),
+    },
+    script,
+  );
+  return { adapter, submissions };
+}
+
+test("agent candidate command identity is stable, namespaced, and case scoped", async () => {
+  const spec = jobSpec();
+  const retry = agentCandidateCommandId(spec);
+  assert.equal(retry, agentCandidateCommandId({ ...spec }));
+  assert.match(retry, /^occavoy-agent-candidate-v1-[0-9a-f]{64}$/);
+  assert.notEqual(retry, agentCandidateCommandId({ ...spec, caseId: "case-other" }));
+  assert.notEqual(retry, agentCandidateCommandId({ ...spec, requestId: "request-other" }));
+  const { adapter, submissions } = adapterTestHarness({
+    script: { modelSteps: [], result: defaultScriptedCandidate },
+  });
+  const submitted = await adapter.run(spec);
+  assert.equal(submitted.status, "submitted");
+  assert.equal(submissions[0].commandId, retry);
+});
+
+test("deadline timer caps and rearms long delays until the real deadline", async () => {
+  const startMs = NOW.getTime();
+  const remainderMs = 1234;
+  const deadlineMs = startMs + MAX_DEADLINE_TIMER_DELAY_MS * 2 + remainderMs;
+  const clock = mockClock(startMs);
+  let abortObserved = false;
+  const { adapter } = adapterTestHarness({
+    clock,
+    script: async (_spec, controls) => {
+      await new Promise((_resolve, reject) => {
+        controls.signal.addEventListener(
+          "abort",
+          () => {
+            abortObserved = true;
+            reject(new Error("deadline stopped the job"));
+          },
+          { once: true },
+        );
+      });
+      return null;
+    },
+  });
+  const running = adapter.run(jobSpec({ deadlineAt: new Date(deadlineMs).toISOString() }));
+  assert.deepEqual(clock.activeDelays(), [MAX_DEADLINE_TIMER_DELAY_MS]);
+  clock.advance(MAX_DEADLINE_TIMER_DELAY_MS);
+  assert.deepEqual(clock.activeDelays(), [MAX_DEADLINE_TIMER_DELAY_MS]);
+  clock.advance(MAX_DEADLINE_TIMER_DELAY_MS);
+  assert.deepEqual(clock.activeDelays(), [remainderMs]);
+  clock.advance(remainderMs);
+  assert.deepEqual(await running, { status: "aborted", reason: "deadline_exceeded" });
+  assert.equal(abortObserved, true);
+  assert.deepEqual(clock.activeDelays(), []);
+});
+
+test("caller cancellation is preserved and cleans up a rearmed deadline timer", async () => {
+  const clock = mockClock(NOW.getTime());
+  const caller = new AbortController();
+  const { adapter } = adapterTestHarness({
+    clock,
+    script: async (_spec, controls) => {
+      await new Promise((_resolve, reject) => {
+        controls.signal.addEventListener("abort", () => reject(new Error("caller cancelled")), {
+          once: true,
+        });
+      });
+      return null;
+    },
+  });
+  const running = adapter.run(jobSpec(), { signal: caller.signal });
+  assert.equal(clock.activeDelays().length, 1);
+  caller.abort();
+  assert.deepEqual(await running, { status: "aborted", reason: "cancelled" });
+  assert.deepEqual(clock.activeDelays(), []);
+});
+
+test("deadline is rechecked after reservation before provider work may continue", async () => {
+  const startMs = NOW.getTime();
+  const deadlineMs = startMs + 100;
+  const clock = mockClock(startMs);
+  let providerWork = false;
+  const { adapter, submissions } = adapterTestHarness({
+    clock,
+    reserveUsage: async () => {
+      clock.advance(150);
+      return { admitted: true, allowance: {} };
+    },
+    script: async (spec, controls) => {
+      await controls.reserveModelCall();
+      providerWork = true;
+      return defaultScriptedCandidate(spec);
+    },
+  });
+  const result = await adapter.run(jobSpec({ deadlineAt: new Date(deadlineMs).toISOString() }));
+  assert.deepEqual(result, { status: "aborted", reason: "deadline_exceeded" });
+  assert.equal(providerWork, false);
+  assert.equal(submissions.length, 0);
 });
 
 dbTest(
@@ -264,6 +444,148 @@ dbTest(
     t.after(() => pool.end());
   },
 );
+
+dbTest(
+  "a supplier RFQ cancelled before drain completes as stale without an external send",
+  async (t) => {
+    const pool = new pg.Pool({ connectionString: DATABASE_URL });
+    await applyMigrations(pool);
+    const store = new PostgresCaseStore(pool);
+    const usageLedger = new PostgresUsageLedger(pool);
+    const tenantId = `service-rfq-cancel-${randomUUID()}`;
+    const caseId = "case-service-rfq-cancel";
+    const { snapshot } = await createFixture(store, tenantId, caseId);
+    const supplierRequests = [];
+    const cancelCalls = [];
+    const coordinator = makeCoordinator({
+      store,
+      usageLedger,
+      supplierRequests,
+      cancelCalls,
+    });
+    await activateAndDrain(coordinator, snapshot, "task-rfq-cancel");
+    const sourcing = await store.getCase(tenantId, caseId);
+    const quoteResult = await coordinator.submitCommand(
+      command(
+        snapshot,
+        {
+          kind: "request_quote",
+          rfq: {
+            id: `rfq-${caseId}`,
+            supplierId: "supplier-fixture",
+            briefVersion: 1,
+            requirementIds: ["requirement-task-rfq-cancel"],
+          },
+        },
+        `${caseId}-request-quote`,
+        sourcing.revision,
+      ),
+      authority(tenantId, caseId, "request_quote", "operator-fixture"),
+    );
+    assert.equal(quoteResult.decision.outcome, "applied");
+    const cancelResult = await coordinator.submitCommand(
+      command(
+        snapshot,
+        { kind: "cancel", reason: "customer cancelled before supplier dispatch" },
+        `${caseId}-cancel-before-quote-drain`,
+        quoteResult.decision.state.revision,
+      ),
+      authority(tenantId, caseId, "cancel"),
+    );
+    assert.equal(cancelResult.decision.outcome, "applied");
+
+    const drain = await coordinator.drainCase(tenantId, caseId);
+    assert.equal(drain.claimed, 1);
+    assert.equal(drain.completed, 1);
+    assert.equal(drain.errors.length, 0);
+    assert.deepEqual(supplierRequests, []);
+    const outbox = await store.listOutboxForCase(tenantId, caseId);
+    assert.equal(outbox[0].status, "completed");
+
+    t.after(() => pool.end());
+  },
+);
+
+dbTest("a retried supplier RFQ is fenced again after a brief revision", async (t) => {
+  const pool = new pg.Pool({ connectionString: DATABASE_URL });
+  await applyMigrations(pool);
+  const store = new PostgresCaseStore(pool);
+  const usageLedger = new PostgresUsageLedger(pool);
+  const tenantId = `service-rfq-revise-${randomUUID()}`;
+  const caseId = "case-service-rfq-revise";
+  const { event, snapshot } = await createFixture(store, tenantId, caseId);
+  const supplierAttempts = [];
+  const cancelCalls = [];
+  const coordinator = makeCoordinator({
+    store,
+    usageLedger,
+    supplierRequests: [],
+    cancelCalls,
+    requestSupplierQuote: async (rfq) => {
+      supplierAttempts.push(rfq.id);
+      throw new Error("synthetic supplier send failure");
+    },
+  });
+  await activateAndDrain(coordinator, snapshot, "task-rfq-revise");
+  const sourcing = await store.getCase(tenantId, caseId);
+  const quoteResult = await coordinator.submitCommand(
+    command(
+      snapshot,
+      {
+        kind: "request_quote",
+        rfq: {
+          id: `rfq-${caseId}`,
+          supplierId: "supplier-fixture",
+          briefVersion: 1,
+          requirementIds: ["requirement-task-rfq-revise"],
+        },
+      },
+      `${caseId}-request-quote`,
+      sourcing.revision,
+    ),
+    authority(tenantId, caseId, "request_quote", "operator-fixture"),
+  );
+  assert.equal(quoteResult.decision.outcome, "applied");
+
+  const failed = await coordinator.drainCase(tenantId, caseId);
+  assert.equal(failed.claimed, 1);
+  assert.equal(failed.requeued, 1);
+  assert.equal(failed.errors.length, 1);
+  assert.deepEqual(supplierAttempts, [`rfq-${caseId}`]);
+  await pool.query(
+    `UPDATE case_outbox SET available_at = now() - interval '1 second'
+     WHERE tenant_id = $1 AND case_id = $2 AND status = 'pending'`,
+    [tenantId, caseId],
+  );
+  const revisedBrief = {
+    id: snapshot.brief.id,
+    version: 2,
+    eventId: event.id,
+    destination: event.destination,
+    budget: { amountMinor: 110000, currency: "GBP" },
+    approverActorId: "payer-fixture",
+  };
+  const revision = await coordinator.submitCommand(
+    command(
+      snapshot,
+      { kind: "revise_brief", brief: revisedBrief },
+      `${caseId}-revise-before-retry`,
+      quoteResult.decision.state.revision,
+    ),
+    authority(tenantId, caseId, "revise_brief"),
+  );
+  assert.equal(revision.decision.outcome, "applied");
+
+  const retryDrain = await coordinator.drainCase(tenantId, caseId);
+  assert.equal(retryDrain.claimed, 1);
+  assert.equal(retryDrain.completed, 1);
+  assert.equal(retryDrain.errors.length, 0);
+  assert.deepEqual(supplierAttempts, [`rfq-${caseId}`]);
+  const outbox = await store.listOutboxForCase(tenantId, caseId);
+  assert.equal(outbox[0].status, "completed");
+
+  t.after(() => pool.end());
+});
 
 dbTest(
   "cancel while a job runs aborts it, meters the attempt, and fences a late candidate",
@@ -598,14 +920,17 @@ dbTest(
       maxModelCalls: 2,
       maxToolCalls: 1,
     };
-    const lateAdapter = new ScriptedCaseJobAdapter({
-      store,
-      usageLedger,
-      relationshipIdForJob: async () =>
-        (await store.getCase(tenantId, caseId)).scope.relationshipId,
-      authorityForJob: (job) => authority(job.tenantId, job.caseId, "agent_candidate"),
-      now: () => NOW,
-    });
+    const lateAdapter = new ScriptedCaseJobAdapter(
+      {
+        store,
+        usageLedger,
+        relationshipIdForJob: async () =>
+          (await store.getCase(tenantId, caseId)).scope.relationshipId,
+        authorityForJob: (job) => authority(job.tenantId, job.caseId, "agent_candidate"),
+        now: () => NOW,
+      },
+      { modelSteps: [] },
+    );
     const late = await lateAdapter.run(lateSpec, { signal: new AbortController().signal });
     assert.equal(late.status, "submitted");
     assert.equal(late.decision.outcome, "ignored");
@@ -671,6 +996,14 @@ dbTest(
       maxCostMinor: 100,
       currency: "GBP",
     });
+    await pool.query(
+      `INSERT INTO case_agent_jobs
+        (tenant_id, case_id, task_id, request_id, brief_version, case_revision,
+         max_model_calls, max_tool_calls, deadline, status)
+       VALUES ($1, $2, 'task-followup', 'request-followup-task', 1, 1, 1, 1,
+               '2027-02-01T12:00:00Z', 'running')`,
+      [tenantId, followup.scope.caseId],
+    );
     const fresh = await usageLedger.reserveUsage({
       tenantId,
       relationshipId: followup.scope.relationshipId,
