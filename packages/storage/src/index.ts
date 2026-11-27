@@ -5,6 +5,7 @@ export {
   type CaseOutboxRow,
   CommandConflictError,
   canonicalJson,
+  DEFAULT_OUTBOX_LEASE_MS,
   hashCommandPayload,
   PostgresCaseStore,
   type ReceivedCommandResult,
