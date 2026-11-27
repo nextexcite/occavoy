@@ -12,6 +12,16 @@ COPY packages/domain/ packages/domain/
 COPY packages/storage/ packages/storage/
 RUN pnpm --filter @occavoy/runtime build
 RUN pnpm --filter @occavoy/runtime --prod deploy /runtime
+RUN rm -rf \
+  /runtime/node_modules/.pnpm/@rivet-dev+agentos-* \
+  /runtime/node_modules/.pnpm/@rivet-dev+agent-os-* \
+  /runtime/node_modules/.pnpm/@agentos-software+* \
+  /runtime/node_modules/.pnpm/@rivet-dev+services@* \
+  /runtime/node_modules/.pnpm/@rivet-dev+services-*@* \
+  /runtime/node_modules/.pnpm/@rivetkit+engine-cli@* \
+  /runtime/node_modules/.pnpm/@rivetkit+engine-cli-*@* \
+  /runtime/node_modules/.pnpm/rivetkit@*/node_modules/@rivet-dev/services \
+  /runtime/node_modules/.pnpm/rivetkit@*/node_modules/@rivetkit/engine-cli
 
 FROM node:26.13.1-bookworm-slim AS runtime
 ENV NODE_ENV=production
