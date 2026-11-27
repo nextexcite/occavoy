@@ -8,6 +8,14 @@ export const moneySchema = z.object({
   currency: z.string().regex(/^[A-Z]{3}$/),
 });
 
+const intakeId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+export const caseIntakeSchema = z.strictObject({
+  activate: z.literal(true),
+  commandId: intakeId,
+  eventId: intakeId,
+  budget: z.strictObject(moneySchema.shape),
+});
+
 export const destinationSchema = z.object({
   countryCode: z.string().regex(/^[A-Z]{2}$/),
   city: z.string().min(1),

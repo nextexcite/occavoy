@@ -57,6 +57,7 @@ export class CommandConflictError extends Error {
 }
 
 export class CaseActivationError extends Error {
+  readonly code = "case_activation_rejected";
   constructor(readonly reason: string) {
     super(reason);
     this.name = "CaseActivationError";
