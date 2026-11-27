@@ -18,6 +18,10 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const dbTest = DATABASE_URL ? test : test.skip;
 const NOW = new Date("2027-01-01T12:00:00Z");
 
+// Real-database integration tests run against Postgres now(); only mock-timer unit
+// specs may use the fixed 2027 clock above.
+const fixtureDeadline = () => new Date(Date.now() + 7 * 86_400_000).toISOString();
+
 function authority(tenantId, caseId, kind, actorId = "runtime-fixture") {
   const permission = {
     activate: "case.edit",
@@ -33,11 +37,11 @@ function authority(tenantId, caseId, kind, actorId = "runtime-fixture") {
     actorId,
     grantId: `grant-${actorId}`,
     permissions: [permission],
-    validUntil: "2027-01-10T12:00:00Z",
+    validUntil: fixtureDeadline(),
   };
 }
 
-async function createFixture(store, tenantId, caseId) {
+async function createFixture(store, tenantId, caseId, deadline = fixtureDeadline()) {
   const event = demoEvents[1];
   const snapshot = await store.createCase({
     relationship: {
@@ -56,7 +60,7 @@ async function createFixture(store, tenantId, caseId) {
       budget: { amountMinor: 100000, currency: "GBP" },
       approverActorId: "payer-fixture",
     },
-    deadline: "2027-01-10T12:00:00Z",
+    deadline,
   });
   return { event, snapshot };
 }
@@ -79,18 +83,22 @@ function makeCoordinator({
   cancelCalls,
   staleDispatchMs = 120000,
   requestSupplierQuote,
+  now = () => new Date(Date.now() + 1000),
+  allowance,
 }) {
   return new ServiceCaseCoordinator({
     store,
     usageLedger,
     staleDispatchMs,
-    now: () => NOW,
-    allowanceForTask: (task) => ({
-      maxModelCalls: task.maxModelCalls,
-      maxToolCalls: task.maxToolCalls,
-      maxCostMinor: 1000,
-      currency: "GBP",
-    }),
+    now,
+    allowanceForTask: allowance
+      ? () => allowance
+      : (task) => ({
+          maxModelCalls: task.maxModelCalls,
+          maxToolCalls: task.maxToolCalls,
+          maxCostMinor: 1000,
+          currency: "GBP",
+        }),
     createJobAdapter: (spec) =>
       new ScriptedCaseJobAdapter(
         {
@@ -99,7 +107,7 @@ function makeCoordinator({
           relationshipIdForJob: async () =>
             (await store.getCase(spec.tenantId, spec.caseId)).scope.relationshipId,
           authorityForJob: (job) => authority(job.tenantId, job.caseId, "agent_candidate"),
-          now: () => NOW,
+          now,
         },
         runnerScript,
       ),
@@ -398,7 +406,11 @@ dbTest(
     assert.equal(runnerStarts, 1, "supplier wait must not keep or start model work");
 
     // Simulate a process loss after the database claim but before dispatch completion.
-    const claimed = await store.claimPendingOutbox(10, { tenantId, caseId });
+    const claimed = await store.claimPendingOutbox(10, {
+      tenantId,
+      caseId,
+      now: new Date(Date.now() + 1000),
+    });
     assert.equal(claimed.length, 1);
     assert.equal(claimed[0].intentKind, "request_supplier_quote");
 
@@ -650,6 +662,12 @@ dbTest(
     const closed = await store.getCase(tenantId, caseId);
     assert.equal(closed.phase, "closed");
     assert.equal(closed.outcome, "cancelled");
+    const falseStops = await pool.query(
+      `SELECT command_id FROM case_commands
+       WHERE tenant_id = $1 AND command_kind = 'agent_task_stopped'`,
+      [tenantId],
+    );
+    assert.equal(falseStops.rows.length, 0, "a committed cancellation records no intervention");
     const allowance = await usageLedger.getAllowance(tenantId, caseId);
     assert.equal(allowance.usedModelCalls, 1, "the interrupted call remains metered");
     assert.equal(allowance.status, "closed");
@@ -664,7 +682,7 @@ dbTest(
       briefVersion: 1,
       purpose: "derive_requirements",
       toolProfile: "case_readonly_v1",
-      deadlineAt: "2027-01-10T12:00:00Z",
+      deadlineAt: snapshot.deadline,
       maxModelCalls: 2,
       maxToolCalls: 2,
     };
@@ -676,7 +694,7 @@ dbTest(
         relationshipIdForJob: async () =>
           (await store.getCase(tenantId, caseId)).scope.relationshipId,
         authorityForJob: (job) => authority(job.tenantId, job.caseId, "agent_candidate"),
-        now: () => NOW,
+        now: () => new Date(),
       },
       async (invocation) => {
         assert.deepEqual(invocation.key, [tenantId, caseId, "task-cancel"]);
@@ -906,6 +924,13 @@ dbTest(
     const current = await store.getCase(tenantId, caseId);
     assert.equal(current.brief.version, 2);
     assert.equal(current.activeTask, null);
+    assert.notEqual(current.waitReason, "agent_intervention");
+    const revisionStops = await pool.query(
+      `SELECT command_id FROM case_commands
+       WHERE tenant_id = $1 AND command_kind = 'agent_task_stopped'`,
+      [tenantId],
+    );
+    assert.equal(revisionStops.rows.length, 0, "a committed revision records no intervention");
 
     const lateSpec = {
       tenantId,
@@ -916,7 +941,7 @@ dbTest(
       briefVersion: 1,
       purpose: "derive_requirements",
       toolProfile: "case_readonly_v1",
-      deadlineAt: "2027-01-10T12:00:00Z",
+      deadlineAt: snapshot.deadline,
       maxModelCalls: 2,
       maxToolCalls: 1,
     };
@@ -927,7 +952,7 @@ dbTest(
         relationshipIdForJob: async () =>
           (await store.getCase(tenantId, caseId)).scope.relationshipId,
         authorityForJob: (job) => authority(job.tenantId, job.caseId, "agent_candidate"),
-        now: () => NOW,
+        now: () => new Date(),
       },
       { modelSteps: [] },
     );
@@ -986,7 +1011,7 @@ dbTest(
         budget: { amountMinor: 90000, currency: "GBP" },
         approverActorId: "payer-fixture",
       },
-      deadline: "2027-02-01T12:00:00Z",
+      deadline: fixtureDeadline(),
     });
     await usageLedger.initializeAllowance({
       tenantId,
@@ -1000,9 +1025,8 @@ dbTest(
       `INSERT INTO case_agent_jobs
         (tenant_id, case_id, task_id, request_id, brief_version, case_revision,
          max_model_calls, max_tool_calls, deadline, status)
-       VALUES ($1, $2, 'task-followup', 'request-followup-task', 1, 1, 1, 1,
-               '2027-02-01T12:00:00Z', 'running')`,
-      [tenantId, followup.scope.caseId],
+       VALUES ($1, $2, 'task-followup', 'request-followup-task', 1, 1, 1, 1, $3, 'running')`,
+      [tenantId, followup.scope.caseId, followup.deadline],
     );
     const fresh = await usageLedger.reserveUsage({
       tenantId,
@@ -1021,5 +1045,280 @@ dbTest(
     assert.equal(relationships.rows.length, 1);
 
     t.after(() => pool.end());
+  },
+);
+
+dbTest(
+  "a budget-exhausted job records intervention evidence and frees the case for a new task",
+  async (t) => {
+    const pool = new pg.Pool({ connectionString: DATABASE_URL });
+    await applyMigrations(pool);
+    t.after(() => pool.end());
+    const store = new PostgresCaseStore(pool);
+    const usageLedger = new PostgresUsageLedger(pool);
+    const tenantId = `service-budget-stop-${randomUUID()}`;
+    const caseId = "case-service-budget-stop";
+    const { snapshot } = await createFixture(store, tenantId, caseId);
+    const supplierRequests = [];
+    const cancelCalls = [];
+    const script = async (spec, controls) => {
+      await controls.reserveModelCall();
+      if (spec.taskId === "task-exhausted") {
+        // The task fence admits exactly one model call; the second is denied.
+        await controls.reserveModelCall();
+      }
+      return defaultScriptedCandidate(spec);
+    };
+    const coordinator = makeCoordinator({
+      store,
+      usageLedger,
+      runnerScript: script,
+      supplierRequests,
+      cancelCalls,
+      allowance: { maxModelCalls: 5, maxToolCalls: 5, maxCostMinor: 1000, currency: "GBP" },
+    });
+    const activation = await coordinator.submitCommand(
+      command(
+        snapshot,
+        { kind: "activate", taskId: "task-exhausted", maxModelCalls: 1, maxToolCalls: 0 },
+        "task-exhausted-activate",
+        0,
+      ),
+      authority(tenantId, caseId, "activate"),
+    );
+    assert.equal(activation.decision.outcome, "applied");
+    const exhaustedTask = activation.decision.state.activeTask;
+    const drain = await coordinator.drainCase(tenantId, caseId);
+    assert.equal(drain.errors.length, 0);
+    assert.equal(drain.completed, 1);
+
+    const job = await pool.query(
+      "SELECT status FROM case_agent_jobs WHERE tenant_id = $1 AND case_id = $2 AND task_id = $3",
+      [tenantId, caseId, "task-exhausted"],
+    );
+    assert.equal(job.rows[0].status, "failed");
+    const stopped = await store.getCase(tenantId, caseId);
+    assert.equal(stopped.activeTask, null);
+    assert.equal(stopped.phase, "clarifying");
+    assert.equal(stopped.waitReason, "agent_intervention");
+    assert.equal(stopped.outcome, null);
+    assert.deepEqual(stopped.lastAgentTaskStop, {
+      taskId: "task-exhausted",
+      reason: "budget_exhausted",
+    });
+    const allowance = await usageLedger.getAllowance(tenantId, caseId);
+    assert.equal(allowance.usedModelCalls, 1, "only the admitted reservation is metered");
+    assert.equal(allowance.status, "active", "a task-level stop does not pause the case allowance");
+    const stopEvents = await pool.query(
+      `SELECT event_kind FROM case_domain_events
+       WHERE tenant_id = $1 AND case_id = $2 AND event_kind = 'command.agent_task_stopped'`,
+      [tenantId, caseId],
+    );
+    assert.equal(stopEvents.rows.length, 1);
+    const outbox = await store.listOutboxForCase(tenantId, caseId);
+    assert.ok(outbox.every((row) => row.status === "completed"));
+
+    // An authorized new activation with a new task identity proceeds past the intervention.
+    const reactivated = await coordinator.submitCommand(
+      command(
+        snapshot,
+        { kind: "activate", taskId: "task-new", maxModelCalls: 1, maxToolCalls: 0 },
+        "task-new-activate",
+        stopped.revision,
+      ),
+      authority(tenantId, caseId, "activate"),
+    );
+    assert.equal(reactivated.decision.outcome, "applied");
+
+    // A late candidate for the stopped task cannot replace the new active task.
+    const current = await store.getCase(tenantId, caseId);
+    const lateCandidate = await coordinator.submitCommand(
+      command(
+        snapshot,
+        {
+          kind: "agent_candidate",
+          candidate: {
+            task: exhaustedTask,
+            requirements: [
+              { id: "hotel", category: "accommodation", description: "Late stale result" },
+            ],
+          },
+        },
+        "task-exhausted-late-candidate",
+        current.revision,
+      ),
+      authority(tenantId, caseId, "agent_candidate"),
+    );
+    assert.equal(lateCandidate.decision.outcome, "ignored");
+    assert.equal(lateCandidate.decision.reason, "stale_agent_candidate");
+    const afterLate = await store.getCase(tenantId, caseId);
+    assert.equal(afterLate.activeTask.taskId, "task-new");
+
+    const secondDrain = await coordinator.drainCase(tenantId, caseId);
+    assert.equal(secondDrain.errors.length, 0);
+    const finished = await store.getCase(tenantId, caseId);
+    assert.equal(finished.phase, "sourcing");
+    assert.equal(finished.activeTask, null);
+    assert.equal(finished.requirements.length, 1);
+  },
+);
+
+dbTest("a first drain past the job deadline records expiry without any paid work", async (t) => {
+  const pool = new pg.Pool({ connectionString: DATABASE_URL });
+  await applyMigrations(pool);
+  t.after(() => pool.end());
+  const store = new PostgresCaseStore(pool);
+  const usageLedger = new PostgresUsageLedger(pool);
+  const tenantId = `service-expiry-stop-${randomUUID()}`;
+  const caseId = "case-service-expiry-stop";
+  const clock = { t: Date.now() };
+  const nowFn = () => new Date(clock.t);
+  const deadline = new Date(clock.t + 10_000).toISOString();
+  const { snapshot } = await createFixture(store, tenantId, caseId, deadline);
+  const supplierRequests = [];
+  const cancelCalls = [];
+  let runnerStarts = 0;
+  const coordinator = makeCoordinator({
+    store,
+    usageLedger,
+    runnerScript: async (spec, controls) => {
+      runnerStarts += 1;
+      await controls.reserveModelCall();
+      return defaultScriptedCandidate(spec);
+    },
+    supplierRequests,
+    cancelCalls,
+    now: nowFn,
+  });
+  const activation = await coordinator.submitCommand(
+    command(
+      snapshot,
+      { kind: "activate", taskId: "task-late", maxModelCalls: 1, maxToolCalls: 0 },
+      "task-late-activate",
+      0,
+    ),
+    authority(tenantId, caseId, "activate"),
+  );
+  assert.equal(activation.decision.outcome, "applied");
+
+  // The first drain only happens after the task deadline has passed.
+  clock.t += 20_000;
+  await pool.query(
+    "UPDATE case_outbox SET available_at = $3 WHERE tenant_id = $1 AND case_id = $2",
+    [tenantId, caseId, nowFn()],
+  );
+  const recovery = await coordinator.recoverCase(tenantId, caseId);
+
+  assert.equal(runnerStarts, 0, "an expired job never starts the runner");
+  assert.equal((await usageLedger.listUsage(tenantId, caseId)).length, 0);
+  const job = await pool.query(
+    "SELECT status FROM case_agent_jobs WHERE tenant_id = $1 AND case_id = $2 AND task_id = $3",
+    [tenantId, caseId, "task-late"],
+  );
+  assert.equal(job.rows[0].status, "expired");
+  // recoverCase reports the post-drain database state, not a pre-drain mix.
+  assert.equal(recovery.state.activeTask, null);
+  assert.equal(recovery.state.phase, "clarifying");
+  assert.equal(recovery.state.waitReason, "agent_intervention");
+  assert.equal(recovery.state.outcome, null, "expiry evidence never closes the case");
+  assert.deepEqual(recovery.state.lastAgentTaskStop, {
+    taskId: "task-late",
+    reason: "deadline_exceeded",
+  });
+});
+
+dbTest(
+  "a crash after the stop commit neither re-runs the job nor writes a second stop",
+  async (t) => {
+    const pool = new pg.Pool({ connectionString: DATABASE_URL });
+    await applyMigrations(pool);
+    t.after(() => pool.end());
+    const store = new PostgresCaseStore(pool);
+    const usageLedger = new PostgresUsageLedger(pool);
+    const tenantId = `service-stop-crash-${randomUUID()}`;
+    const caseId = "case-service-stop-crash";
+    const clock = { t: Date.now() };
+    const nowFn = () => new Date(clock.t);
+    const { snapshot } = await createFixture(store, tenantId, caseId);
+    const supplierRequests = [];
+    const cancelCalls = [];
+    let runnerStarts = 0;
+    const runnerScript = async (spec, controls) => {
+      runnerStarts += 1;
+      await controls.reserveModelCall();
+      await controls.reserveModelCall();
+      return defaultScriptedCandidate(spec);
+    };
+    const allowance = { maxModelCalls: 5, maxToolCalls: 5, maxCostMinor: 1000, currency: "GBP" };
+    const coordinator = makeCoordinator({
+      store,
+      usageLedger,
+      runnerScript,
+      supplierRequests,
+      cancelCalls,
+      now: nowFn,
+      allowance,
+    });
+    await coordinator.submitCommand(
+      command(
+        snapshot,
+        { kind: "activate", taskId: "task-crash", maxModelCalls: 1, maxToolCalls: 0 },
+        "task-crash-activate",
+        0,
+      ),
+      authority(tenantId, caseId, "activate"),
+    );
+    await pool.query(
+      "UPDATE case_outbox SET available_at = $3 WHERE tenant_id = $1 AND case_id = $2",
+      [tenantId, caseId, nowFn()],
+    );
+
+    const originalComplete = store.completeOutbox.bind(store);
+    let injected = true;
+    store.completeOutbox = async (...args) => {
+      if (injected) {
+        injected = false;
+        throw new Error("injected completion failure");
+      }
+      return originalComplete(...args);
+    };
+    const firstDrain = await coordinator.drainCase(tenantId, caseId);
+    store.completeOutbox = originalComplete;
+    assert.equal(firstDrain.errors.length, 1);
+    assert.equal(firstDrain.requeued, 1);
+
+    // The stop itself is already durable even though the outbox row is not completed.
+    const interrupted = await store.getCase(tenantId, caseId);
+    assert.equal(interrupted.activeTask, null);
+    assert.equal(interrupted.waitReason, "agent_intervention");
+
+    // After the backoff a fresh coordinator/store pair drains the same row.
+    clock.t += 5_000;
+    const freshStore = new PostgresCaseStore(pool);
+    const fresh = makeCoordinator({
+      store: freshStore,
+      usageLedger,
+      runnerScript,
+      supplierRequests,
+      cancelCalls,
+      now: nowFn,
+      allowance,
+    });
+    const secondDrain = await fresh.drainCase(tenantId, caseId);
+    assert.equal(secondDrain.errors.length, 0);
+    assert.equal(secondDrain.completed, 1);
+    assert.equal(runnerStarts, 1, "the job never re-runs after its stop is committed");
+
+    const stopCommands = await pool.query(
+      `SELECT command_id FROM case_commands
+       WHERE tenant_id = $1 AND case_id = $2 AND command_kind = 'agent_task_stopped'`,
+      [tenantId, caseId],
+    );
+    assert.equal(stopCommands.rows.length, 1, "exactly one durable stop receipt");
+    const outbox = await store.listOutboxForCase(tenantId, caseId);
+    assert.ok(outbox.every((row) => row.status === "completed"));
+    const final = await store.getCase(tenantId, caseId);
+    assert.equal(final.activeTask, null);
+    assert.deepEqual(final.lastAgentTaskStop, { taskId: "task-crash", reason: "budget_exhausted" });
   },
 );

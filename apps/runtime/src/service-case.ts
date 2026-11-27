@@ -110,6 +110,20 @@ function validateTaskScope(row: CaseOutboxRow, task: AgentTaskReference): void {
   }
 }
 
+function sameTask(
+  active: AgentTaskReference | null | undefined,
+  task: AgentTaskReference,
+): boolean {
+  return (
+    !!active &&
+    active.taskId === task.taskId &&
+    active.caseRevision === task.caseRevision &&
+    active.briefVersion === task.briefVersion &&
+    active.tenantId === task.tenantId &&
+    active.caseId === task.caseId
+  );
+}
+
 function sameRfq(left: CaseRfq, right: CaseRfq): boolean {
   return (
     left.id === right.id &&
@@ -241,8 +255,8 @@ export class ServiceCaseCoordinator {
   }
 
   async recoverCase(tenantId: string, caseId: string): Promise<ServiceCaseRecoverySnapshot> {
-    const state = await this.deps.store.getCase(tenantId, caseId);
     const drain = await this.drainCase(tenantId, caseId);
+    const state = await this.deps.store.getCase(tenantId, caseId);
     const after = await this.deps.store.listOutboxForCase(tenantId, caseId);
     return { state, outbox: after, drain };
   }
@@ -302,13 +316,7 @@ export class ServiceCaseCoordinator {
     validateTaskScope(row, task);
     const snapshot = await this.deps.store.getCase(row.tenantId, row.caseId);
     if (!snapshot) throw new Error("case_not_found_for_agent_task");
-    const active = snapshot.activeTask;
-    if (
-      !active ||
-      active.taskId !== task.taskId ||
-      active.caseRevision !== task.caseRevision ||
-      active.briefVersion !== task.briefVersion
-    ) {
+    if (!sameTask(snapshot.activeTask, task)) {
       return;
     }
     const spec: AgentJobSpec = {
@@ -345,20 +353,66 @@ export class ServiceCaseCoordinator {
         });
       }
       const current = await this.deps.store.getCase(row.tenantId, row.caseId);
-      const stillActive = current?.activeTask;
-      if (
-        controller.signal.aborted ||
-        !stillActive ||
-        stillActive.taskId !== task.taskId ||
-        stillActive.caseRevision !== task.caseRevision ||
-        stillActive.briefVersion !== task.briefVersion
-      ) {
+      if (controller.signal.aborted || !sameTask(current?.activeTask, task)) {
         return;
       }
       const adapter = this.deps.createJobAdapter(spec);
-      await adapter.run(spec, { signal: controller.signal });
+      const completion = await adapter.run(spec, { signal: controller.signal });
+      if (completion.status === "submitted" && completion.decision.outcome === "applied") return;
+      await this.recordAgentTaskStop(row, task, completion);
     } finally {
       this.jobs.delete(key);
+    }
+  }
+
+  /**
+   * Records why a bounded job ended without an accepted candidate, using a
+   * short-lived internal receipt authority scoped to agent.stop only. This
+   * evidence never extends a job/candidate grant and never restarts work.
+   */
+  private async recordAgentTaskStop(
+    row: CaseOutboxRow,
+    task: AgentTaskReference,
+    completion: Awaited<ReturnType<RunnableJobAdapter["run"]>>,
+  ): Promise<void> {
+    const now = this.now();
+    const current = await this.deps.store.getCase(row.tenantId, row.caseId);
+    if (!current) throw new Error("case_not_found_for_agent_task");
+    // A committed newer/revised/closed state already accounts for this run.
+    if (!sameTask(current.activeTask, task)) return;
+    const reason =
+      completion.status === "submitted"
+        ? Date.parse(task.deadline) <= now.getTime()
+          ? "deadline_exceeded"
+          : "candidate_rejected"
+        : completion.reason;
+    const result = await this.deps.store.submitCommand(
+      {
+        kind: "agent_task_stopped",
+        task,
+        reason,
+        tenantId: row.tenantId,
+        caseId: row.caseId,
+        expectedRevision: current.revision,
+        commandId: `agent-stop:${row.id}:${current.revision}:${reason}`,
+      },
+      {
+        now,
+        authority: {
+          tenantId: row.tenantId,
+          caseId: row.caseId,
+          actorId: "service-case-runtime",
+          grantId: `outbox-stop:${row.id}`,
+          permissions: ["agent.stop"],
+          validUntil: new Date(now.getTime() + 60_000).toISOString(),
+        },
+      },
+    );
+    if (
+      result.decision.outcome !== "applied" &&
+      sameTask((await this.deps.store.getCase(row.tenantId, row.caseId))?.activeTask, task)
+    ) {
+      throw new Error("agent_task_stop_not_persisted");
     }
   }
 

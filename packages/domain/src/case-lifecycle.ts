@@ -18,6 +18,7 @@ export type CasePhase =
   | "closed";
 export type CaseWaitReason =
   | "agent_task"
+  | "agent_intervention"
   | "supplier_quote"
   | "approval"
   | "supplier_confirmation"
@@ -58,6 +59,13 @@ export interface AgentTaskReference {
   maxToolCalls: number;
   deadline: string;
 }
+
+/** Evidence about why a bounded job ended without an accepted candidate. */
+export type AgentTaskStopReason =
+  | "budget_exhausted"
+  | "deadline_exceeded"
+  | "cancelled"
+  | "candidate_rejected";
 
 export interface ResourceRequirement {
   id: string;
@@ -136,6 +144,7 @@ export interface ProposalApproval {
 export type CasePermission =
   | "case.edit"
   | "agent.result"
+  | "agent.stop"
   | "supply.request"
   | "supply.record"
   | "proposal.write"
@@ -197,6 +206,8 @@ export interface CaseSnapshot {
   cancelRequested: boolean;
   cancellationReason: string | null;
   outcome: "fulfilled" | "declined" | "unavailable" | "cancelled" | null;
+  /** Historical record of the most recent stopped task; never reopens spend authority. */
+  lastAgentTaskStop?: { taskId: string; reason: AgentTaskStopReason };
 }
 
 export type CaseCommandBody =
@@ -204,6 +215,7 @@ export type CaseCommandBody =
   | { kind: "cancel"; reason: string }
   | { kind: "revise_brief"; brief: CaseBrief }
   | { kind: "agent_candidate"; candidate: AgentTaskCandidate }
+  | { kind: "agent_task_stopped"; task: AgentTaskReference; reason: AgentTaskStopReason }
   | { kind: "request_quote"; rfq: CaseRfq }
   | { kind: "record_quote"; quote: CaseQuote }
   | { kind: "stage_proposal"; proposal: CaseProposal }
@@ -249,6 +261,7 @@ const permissions: Record<CaseCommandBody["kind"], CasePermission> = {
   cancel: "case.edit",
   revise_brief: "case.edit",
   agent_candidate: "agent.result",
+  agent_task_stopped: "agent.stop",
   request_quote: "supply.request",
   record_quote: "supply.record",
   stage_proposal: "proposal.write",
@@ -520,6 +533,38 @@ export function decideCase(
       next.approval = null;
       next.phase = "clarifying";
       next.waitReason = null;
+      break;
+    }
+    case "agent_task_stopped": {
+      const task = command.task;
+      if (
+        current.phase !== "clarifying" ||
+        current.waitReason !== "agent_task" ||
+        !current.activeTask ||
+        current.activeTask.taskId !== task.taskId ||
+        current.activeTask.caseRevision !== task.caseRevision ||
+        current.brief.version !== task.briefVersion ||
+        current.scope.tenantId !== task.tenantId ||
+        current.scope.caseId !== task.caseId
+      ) {
+        return stop("stale_agent_task", "ignored");
+      }
+      if (
+        !["budget_exhausted", "deadline_exceeded", "cancelled", "candidate_rejected"].includes(
+          command.reason,
+        )
+      ) {
+        return stop("invalid_agent_task_stop");
+      }
+      if (
+        command.reason === "deadline_exceeded" &&
+        beforeExpiry(current.activeTask.deadline, now)
+      ) {
+        return stop("agent_task_not_expired");
+      }
+      next.activeTask = null;
+      next.waitReason = "agent_intervention";
+      next.lastAgentTaskStop = { taskId: task.taskId, reason: command.reason };
       break;
     }
     case "agent_candidate": {

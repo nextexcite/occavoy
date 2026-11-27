@@ -27,6 +27,7 @@ const PERMISSIONS: Record<CaseCommandBody["kind"], CasePermission> = {
   cancel: "case.edit",
   revise_brief: "case.edit",
   agent_candidate: "agent.result",
+  agent_task_stopped: "agent.stop",
   request_quote: "supply.request",
   record_quote: "supply.record",
   stage_proposal: "proposal.write",

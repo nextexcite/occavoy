@@ -614,7 +614,14 @@ export class PostgresCaseStore {
       );
     }
     if (previousTask && currentTask !== previousTask) {
-      const status = command.kind === "agent_candidate" ? "completed" : "cancelled";
+      let status: string;
+      if (command.kind === "agent_task_stopped") {
+        if (command.reason === "deadline_exceeded") status = "expired";
+        else if (command.reason === "cancelled") status = "cancelled";
+        else status = "failed";
+      } else {
+        status = command.kind === "agent_candidate" ? "completed" : "cancelled";
+      }
       await client.query(
         `UPDATE case_agent_jobs SET status = $4, updated_at = now()
          WHERE tenant_id = $1 AND case_id = $2 AND task_id = $3`,
