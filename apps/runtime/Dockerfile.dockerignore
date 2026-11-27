@@ -1,0 +1,11 @@
+# Root build context, explicitly limited to runtime inputs.
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!apps/
+!apps/runtime/
+!apps/runtime/package.json
+!apps/runtime/tsconfig.json
+!apps/runtime/src/
+!apps/runtime/src/**

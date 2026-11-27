@@ -1,0 +1,17 @@
+packages:
+  - apps/*
+  - packages/*
+
+saveExact: true
+strictPeerDependencies: true
+minimumReleaseAge: 0
+allowBuilds:
+  esbuild: true
+  workerd: true
+  sharp: true
+  cbor-extract: true
+permissions:
+  "@tanstack/react-router":
+    skills: false
+  "@tanstack/react-start":
+    skills: false

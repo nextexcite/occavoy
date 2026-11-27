@@ -1,0 +1,33 @@
+{
+  "name": "occavoy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.23.0",
+  "engines": {
+    "node": ">=26.13.1 <27",
+    "pnpm": "12.23.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @occavoy/web dev",
+    "dev:runtime": "pnpm --filter @occavoy/runtime dev",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "vitest run && pnpm --filter @occavoy/runtime test",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "check:python": "uv run ruff check experiments scripts && uv run ruff format --check experiments scripts && uv run --package occavoy-evals pytest experiments/evals/tests",
+    "verify:runtime": "pnpm --filter @occavoy/runtime verify:restart",
+    "deploy:web": "pnpm --filter @occavoy/web deploy",
+    "experiment:new": "uv run python scripts/new_experiment.py"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.9",
+    "@rivetkit/cli": "3.1.1",
+    "@types/node": "26.6.11",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.1.2"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "occavoy-web",
+  "main": "@tanstack/react-start/server-entry",
+  "compatibility_date": "2026-11-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "vars": {
+    "CUSTOMER_MARKET": "HK",
+    "DESTINATION_SCOPE": "global",
+    "R2_CAPACITY_BYTES": "8000000000",
+    "UPLOADS_ENABLED": "false"
+  }
+  // Add an R2 binding only after the persistent quota ledger is integrated.
+  // All environments must share the 8,000,000,000-byte Occavoy budget.
+}

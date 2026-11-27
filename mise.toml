@@ -1,0 +1,31 @@
+min_version = "2026.11.14"
+
+[tools]
+node = "26.13.1"
+pnpm = "12.23.0"
+python = "3.15.2"
+uv = "0.13.10"
+
+[env]
+UV_PYTHON = "3.15.2"
+R2_CAPACITY_BYTES = "8000000000"
+
+[tasks.bootstrap]
+description = "Install both locked workspaces"
+run = ["pnpm install --frozen-lockfile", "uv sync --all-packages --locked"]
+
+[tasks.dev]
+description = "Run the TanStack frontend with local Workers bindings"
+run = "pnpm dev"
+
+[tasks.runtime]
+description = "Run the local Rivet development probe"
+run = "pnpm dev:runtime"
+
+[tasks.check]
+description = "Run the same checks as CI"
+run = ["pnpm check", "pnpm check:python"]
+
+[tasks.experiment]
+description = "Create a uv workspace experiment: mise run experiment -- slug"
+run = "uv run python scripts/new_experiment.py"
