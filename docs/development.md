@@ -38,9 +38,9 @@ mise exec -- pnpm verify:harness
 uv run --package occavoy-evals pytest experiments/evals/tests
 ```
 
-The Compose Postgres service is a local disposable fixture. The `occavoy`/`occavoy` credentials are public local-only fixture values — never point these commands at a production or shared database. Plain `pnpm check` without `DATABASE_URL` skips the database-backed suites. The product checkout has no env-file loader; pass the variables in the shell as above.
+The Compose Postgres service is a local disposable fixture. The `occavoy`/`occavoy` credentials are public local-only fixture values — never point these commands at a production or shared database. Plain `pnpm check` without `DATABASE_URL` skips the database-backed suites. The runtime `dev`/`test` scripts and the vitest setup preload the narrow names from the ignored `.env.local` snapshot; explicit shell variables as above still win. See [environment.md](environment.md) for the refresh lane and loader contract.
 
-`pnpm check` is the TypeScript workspace integration check. `pnpm check:python` adds Python lint, formatting, and the evaluation tests; the final command above runs just the evaluation tests. Run the relevant package checks during development and the root check before integration. Run Python checks when experiments or their contracts change. Formatting and relative-link checks are sufficient for ordinary documentation-only edits.
+`pnpm check` is the TypeScript workspace integration check. `pnpm check:python` adds Python lint, formatting, the evaluation tests, and the env-lane regression tests under `scripts/tests`; the final command above runs just the evaluation tests. Run the relevant package checks during development and the root check before integration. Run Python checks when experiments or their contracts change. Formatting and relative-link checks are sufficient for ordinary documentation-only edits.
 
 Create a new Python experiment with `mise run experiment -- <slug>`. Keep it in the `uv` workspace rather than creating an unrelated environment or dependency lock.
 

@@ -71,20 +71,20 @@ A long-lived ServiceCase coordinator and a bounded AgentTask are separate respon
 
 ## Local development
 
-From the repository root, install the pinned mise tools and workspace dependencies. Set a private token in the shell; do not commit its value or expose it in browser JavaScript.
+From the repository root, install the pinned mise tools and workspace dependencies, then refresh the local env snapshot. Never commit secret values or expose them in browser JavaScript.
 
 ```sh
 mise install
 mise exec -- pnpm install --frozen-lockfile
-export OCCAVOY_RUNTIME_MODE=local
-export OCCAVOY_RUNTIME_DEMO_TOKEN="$(openssl rand -hex 32)"
-export DATABASE_URL="postgres://USER:PASSWORD@HOST:PORT/DATABASE"
+mise run secrets:refresh
 mise exec -- pnpm --filter @occavoy/runtime dev
 ```
 
+The `dev` script preloads the narrow local names from the ignored `.env.local` snapshot; see [docs/environment.md](../../docs/environment.md) for the refresh lane, the loader contract, and the shell-export fallback. A safe disposable `DATABASE_URL` target is the Compose Postgres fixture at `postgresql://127.0.0.1:54329/occavoy` with the public local-only `occavoy`/`occavoy` credentials.
+
 The local native SDK starts a development control plane at `http://localhost:6420`. The auxiliary HTTP listener is `http://127.0.0.1:8080/healthz`. Its response is process liveness only; it does not prove actor connectivity, durability, or cloud deployment. The `startServices:false` setting avoids starting unrelated services.
 
-The token must be present in the verification shell too. A token changes authentication, not actor state. Keep local engine data outside a published repository; never commit credentials or local state.
+Unlike `dev` and `test`, `verify:live` does not preload the snapshot: pass the same values explicitly (for example through `pnpm local:exec` from the repository root) so the verification shell shares the token. A token changes authentication, not actor state. Keep local engine data outside a published repository; never commit credentials or local state.
 
 ## Meaningful verification
 
