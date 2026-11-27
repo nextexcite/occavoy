@@ -60,7 +60,7 @@ deployed commercial service.
 To see what durability changes for a customer, run `mise exec -- pnpm demo:london` with the
 disposable Compose Postgres on port 54329. The [saved-case walkthrough](docs/london-saved-case.md)
 lets you reopen the original request, approve one synthetic event-access offer and watch a lost
-supplier reply get resolved without rebooking. `pnpm verify:london` runs it unattended.
+supplier reply get resolved without rebooking. `pnpm verify:london` runs it unattended. [Watch the offline recording (MP4)](docs/london-offline-demo.mp4).
 The [earlier HTTP-to-supplier and RFQ-only traces](docs/local-case-trace.md) remain separate checks.
 
 ```sh

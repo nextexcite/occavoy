@@ -2,6 +2,26 @@
 
 **Local demonstration, synthetic event access only.** Close the customer's tab during a service interruption. Sign in again and the London performance, date, budget and progress are still there. Later, when the supplier's reply goes missing, the customer sees a reason to wait, not another purchase button. An operator checks the **original submission**.
 
+## Watch offline
+
+[Play the recorded London case (MP4)](london-offline-demo.mp4) in a local video player. It needs no account, server, database or network. This is the actual browser capture at twice normal speed, with eight chapter markers and backend captions; the captions explain the actions, not a simulated timeline. For the interactive version, follow the commands below. Install the pinned tools, workspace dependencies and disposable Postgres image beforehand if you need to run it disconnected.
+
+Recorded on local main at `fbb4dc3`: the interactive test passed in 317.2 seconds including presenter pauses. The browser approved one GBP 186 offer. The Postgres ledger and dispatcher checks ended with one synthetic supplier submission, one order and one original-reference lookup. Payment remained unobserved and fulfilment pending. Inference credentials were not supplied to the demo. This records the local milestone only, not the start of a hosted pilot.
+
+### Stage decision and follow-up
+
+The local synthetic London stage is complete. A Pi source review of `fbb4dc3` using GPT-6 Astra at high thinking found no P0 within that scope. The review did not run tests; the recorded browser and terminal run is the separate execution evidence. Five P2 findings remain open:
+
+| Before shared dev | Regression to add |
+| --- | --- |
+| Recheck quote and approval expiry at dispatch, not only before waiting on the database. | Hold the case lock across expiry; no supplier call may follow. |
+| Show cancellation and an unresolved supplier result together. | Cancel after a lost reply; the customer must still see that the original order is being checked. |
+| Handle simultaneous clicks on the exact approval. | Two concurrent POSTs with different server times must produce one approval and no internal error. |
+| Isolate ordinary database tests as strictly as the London fixture. | Reject non-test targets before migration; leave unrelated schemas untouched. |
+| Run the unattended London path in CI. | Require `verify:london` in addition to the RFQ-only recovery check. |
+
+The proposed next proof is the same synthetic case on a private `dev` runtime and isolated Postgres. First close the five gaps and reproduce the local counters there without a live model. Then qualify one separately capped inference task; model output remains a candidate, never an approval or a booking. Neither hosted run has been performed as part of this stage.
+
 ## Run it
 
 Use Linux with `pgrep` and the repository's [pinned tools](development.md). From the repository root:
@@ -47,6 +67,6 @@ The sign-in button selects **one fixed local fixture identity**, not a productio
 
 The [earlier hotel/closure and RFQ-only proofs](local-case-trace.md) remain separate regressions. This is local evidence related to [OCA-34](https://linear.app/tianjis/issue/OCA-34), not a change to its tracker status. No manual baseline or service-time saving was measured. A later paired trial could count customer status enquiries and time an operator from first seeing an unknown result to obtaining original-reference evidence, with the same brief and fault in both arms.
 
-Measured locally on 2026-11-27 (Node 26.13.1, RivetKit 3.1.1, Pi adapter 0.5.7, Pi Durable 1.5.2): the unattended London test passed in 69.0 s (102 s including build/command overhead). The presenter path was exercised through a terminal and loopback HTTP form submissions in 195.5 s, including intentional pauses; no graphical-browser or usability trial was run. From first worktree inspection to review of the passing integrated journey and its fixes was about 63 minutes elapsed; active human effort and blocked time were not separately instrumented.
+Measured locally on 2026-11-27 (Node 26.13.1, RivetKit 3.1.1, Pi adapter 0.5.7, Pi Durable 1.5.2): the unattended London test passed in 69.0 s (102 s including build/command overhead). The presenter path was exercised through a terminal and loopback HTTP form submissions in 195.5 s, including intentional pauses; that earlier run used HTTP clients, not a graphical browser. The later recorded browser run is linked above; neither was a usability trial. From first worktree inspection to review of the passing integrated journey and its fixes was about 63 minutes elapsed; active human effort and blocked time were not separately instrumented.
 
 The standalone RFQ recovery regression also passed during development. The Postgres-backed repository suites ran 79 Vitest and 22 runtime tests, including the separate hotel trace. During London verification a coordinator drain was forced between the handoff commit and the supplier call: it claimed zero effect rows. The dispatcher, not a replayed outbox notification, made the only synthetic submission.
