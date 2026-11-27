@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./effect-dispatcher": "./src/effect-dispatcher.ts",
+    "./fake-supplier": "./src/fake-supplier.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
