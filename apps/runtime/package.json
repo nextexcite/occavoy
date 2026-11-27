@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "sql"
   ],
   "scripts": {
     "dev": "tsx watch src/server.ts",

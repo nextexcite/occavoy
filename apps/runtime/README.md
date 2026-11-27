@@ -16,7 +16,7 @@ Neither fixture books, charges, contacts a supplier, or creates a sandbox. The s
 
 `PostgresUsageLedger` reserves model/tool usage before paid steps. Its counters are stored in `case_allowances`; every admitted or denied attempt is attributed in `case_usage_ledger` with a cost category. Exhaustion atomically pauses the case allowance with `budget_exhausted`, blocking further discretionary paid work while still permitting controlled `reconciliation_lookup` attribution for existing unknown obligations. Closing a case closes only that case allowance, not the customer relationship.
 
-The runtime build typechecks and then bundles the runtime with first-party workspace TypeScript into `dist` using esbuild. Versioned third-party runtime dependencies remain external, so the production image does not execute TypeScript sources from `node_modules`.
+The runtime build typechecks and then bundles the runtime with first-party workspace TypeScript into `dist` using esbuild. Versioned third-party runtime dependencies remain external, so the production image does not execute TypeScript sources from `node_modules`. The immutable storage migrations are copied beside `dist` because `applyMigrations` intentionally resolves them relative to the bundled module URL.
 
 ## Durable reasoning probe
 
