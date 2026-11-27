@@ -1,25 +1,49 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 const SQL_DIRECTORY = fileURLToPath(new URL("../sql", import.meta.url));
 
+// The lock is namespaced by current_schema() so isolated test schemas never
+// block each other while two callers in the same schema strictly serialize.
+const LOCK_KEY = "occavoy_schema_migrations:";
+
+async function takeLock(client: PoolClient): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1 || current_schema()))", [LOCK_KEY]);
+}
+
 /**
- * Applies every unapplied `sql/*.sql` file in filename order, each inside one
- * transaction guarded by a transaction-scoped advisory lock so concurrent
- * starters cannot double-apply a version. Returns the newly applied versions.
+ * Applies every unapplied `sql/*.sql` file in filename order. Phase 1 creates
+ * the ledger inside an advisory-locked transaction so concurrent first-time
+ * initializers in the same schema serialize cleanly. Phase 2 then applies each
+ * unapplied file in its own advisory-locked transaction so a failing migration
+ * rolls back without undoing the ledger. Returns the newly applied versions.
  */
 export async function applyMigrations(pool: Pool): Promise<string[]> {
-  await pool.query(
-    `CREATE TABLE IF NOT EXISTS schema_migrations (
-      version text PRIMARY KEY,
-      applied_at timestamptz NOT NULL DEFAULT now()
-    )`,
-  );
-  const applied = await pool.query<{ version: string }>(
-    "SELECT version FROM schema_migrations ORDER BY version",
-  );
-  const seen = new Set(applied.rows.map((row) => row.version));
+  const seen = new Set<string>();
+  {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await takeLock(client);
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS schema_migrations (
+          version text PRIMARY KEY,
+          applied_at timestamptz NOT NULL DEFAULT now()
+        )`,
+      );
+      const applied = await client.query<{ version: string }>(
+        "SELECT version FROM schema_migrations",
+      );
+      for (const row of applied.rows) seen.add(row.version);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   const files = readdirSync(SQL_DIRECTORY)
     .filter((name) => name.endsWith(".sql"))
     .sort();
@@ -31,9 +55,7 @@ export async function applyMigrations(pool: Pool): Promise<string[]> {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
-        "occavoy_schema_migrations",
-      ]);
+      await takeLock(client);
       const check = await client.query("SELECT 1 FROM schema_migrations WHERE version = $1", [
         version,
       ]);

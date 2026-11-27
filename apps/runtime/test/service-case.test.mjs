@@ -194,7 +194,7 @@ dbTest(
     const recovered = await replacement.recoverCase(tenantId, caseId);
     assert.equal(recovered.state.revision, state.revision);
     assert.equal(recovered.state.waitReason, "supplier_quote");
-    assert.equal(recovered.drain.requeuedStale, 1);
+    assert.equal(recovered.drain.claimed, 1);
     assert.deepEqual(supplierRequests, [`rfq-${caseId}`]);
     assert.equal(runnerStarts, 1);
 

@@ -44,7 +44,6 @@ export interface CaseJobCancellationContext {
 }
 
 export interface ServiceCaseDrainSummary {
-  requeuedStale: number;
   claimed: number;
   completed: number;
   requeued: number;
@@ -216,19 +215,19 @@ export class ServiceCaseCoordinator {
 
   private async drainLoop(tenantId: string, caseId: string): Promise<ServiceCaseDrainSummary> {
     const staleMs = this.deps.staleDispatchMs ?? 120_000;
-    const staleBefore = new Date(this.now().getTime() - staleMs);
     const summary: ServiceCaseDrainSummary = {
-      requeuedStale: await this.deps.store.requeueStaleDispatchedOutbox(staleBefore, {
-        tenantId,
-        caseId,
-      }),
       claimed: 0,
       completed: 0,
       requeued: 0,
       errors: [],
     };
     for (;;) {
-      const rows = await this.deps.store.claimPendingOutbox(10, { tenantId, caseId });
+      const rows = await this.deps.store.claimPendingOutbox(10, {
+        tenantId,
+        caseId,
+        now: this.now(),
+        leaseTimeoutMs: staleMs,
+      });
       if (rows.length === 0) break;
       summary.claimed += rows.length;
       for (const row of rows) {

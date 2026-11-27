@@ -309,7 +309,7 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
   it("applies migrations idempotently and rolls a failing migration back cleanly", async () => {
     const recorded = await pool.query("SELECT version FROM schema_migrations ORDER BY version");
     expect(recorded.rows.map((row) => row.version)).toEqual(
-      expect.arrayContaining(["001_quota", "002_case_core"]),
+      expect.arrayContaining(["001_quota", "002_case_core", "004_usage_allowances"]),
     );
     expect(await applyMigrations(pool)).toEqual([]);
     const client = await pool.connect();
@@ -325,6 +325,42 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
       "SELECT version FROM schema_migrations WHERE version = '999_broken'",
     );
     expect(check.rowCount).toBe(0);
+  });
+
+  it("serializes concurrent first-time initialization in the same schema", async () => {
+    const schema = `mig_race_${randomUUID().replaceAll("-", "")}`;
+    const poolA = new pg.Pool({
+      connectionString: DATABASE_URL,
+      options: `-c search_path=${schema}`,
+    });
+    const poolB = new pg.Pool({
+      connectionString: DATABASE_URL,
+      options: `-c search_path=${schema}`,
+    });
+    try {
+      await pool.query(`CREATE SCHEMA ${schema}`);
+      const [appliedA, appliedB] = await Promise.all([
+        applyMigrations(poolA),
+        applyMigrations(poolB),
+      ]);
+      expect([...appliedA, ...appliedB].sort()).toEqual([
+        "001_quota",
+        "002_case_core",
+        "004_usage_allowances",
+      ]);
+      const recorded = await pool.query(
+        `SELECT version FROM ${schema}.schema_migrations ORDER BY version`,
+      );
+      expect(recorded.rows.map((row) => row.version)).toEqual([
+        "001_quota",
+        "002_case_core",
+        "004_usage_allowances",
+      ]);
+    } finally {
+      await poolA.end();
+      await poolB.end();
+      await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    }
   });
 
   it.each([
@@ -560,6 +596,177 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
     expect(
       (await store.claimPendingOutbox(10, { tenantId })).filter((row) => row.id === claimedItem.id),
     ).toEqual([]);
+  });
+
+  it("reclaims a stranded dispatched lease after the lease timeout without requeue", async () => {
+    const tenantId = tenant();
+    const { harness } = await createCase(store, tenantId, "case-lease");
+    expectApplied(
+      await harness.submit({
+        kind: "activate",
+        taskId: "task-lease",
+        maxModelCalls: 2,
+        maxToolCalls: 3,
+      }),
+    );
+    // Simulated restart: a fresh store instance observes the stranded claim.
+    const freshStore = new PostgresCaseStore(pool);
+    const t0 = new Date("2027-01-01T00:00:00Z");
+    const claimed = await freshStore.claimPendingOutbox(10, { tenantId, now: t0 });
+    const mine = claimed.filter(
+      (row) => row.tenantId === tenantId && row.caseId === harness.caseId,
+    );
+    expect(mine).toHaveLength(1);
+    const claimedItem = mine[0];
+    if (!claimedItem) throw new Error("Missing claimed outbox item");
+    // Within the 60s lease the row stays claimed and invisible to other workers.
+    expect(
+      await freshStore.claimPendingOutbox(10, {
+        tenantId,
+        now: new Date(t0.getTime() + 10_000),
+      }),
+    ).toEqual([]);
+    // Past the lease the stranded dispatch is reclaimed without requeueOutbox.
+    const reclaimed = await freshStore.claimPendingOutbox(10, {
+      tenantId,
+      now: new Date(t0.getTime() + 61_000),
+    });
+    const again = reclaimed.filter((row) => row.id === claimedItem.id);
+    expect(again).toHaveLength(1);
+    expect(again[0]).toMatchObject({ status: "dispatched", attempts: 2 });
+    // The explicit stale-scan path resets it to pending for the next claim.
+    const reset = await freshStore.reclaimStaleOutbox({
+      tenantId,
+      now: new Date(t0.getTime() + 2 * 61_000),
+    });
+    expect(reset.filter((row) => row.id === claimedItem.id)).toHaveLength(1);
+    const rows = await store.listOutboxForCase(tenantId, harness.caseId);
+    expect(rows[0]?.status).toBe("pending");
+  });
+
+  it("projects commercial parties from the selected proposal and current brief", async () => {
+    const tenantId = tenant();
+    const { harness } = await createCase(store, tenantId, "case-parties");
+    const parties = async () => {
+      const result = await pool.query(
+        `SELECT seller_id, fulfiller_id, payer_id FROM service_cases
+         WHERE tenant_id = $1 AND id = $2`,
+        [tenantId, harness.caseId],
+      );
+      return result.rows[0];
+    };
+    expect(await parties()).toMatchObject({
+      seller_id: null,
+      fulfiller_id: null,
+      payer_id: "payer-fixture",
+    });
+    // Revising the brief swaps the payer and clears any stale supplier parties.
+    expectApplied(
+      await harness.submit({
+        kind: "revise_brief",
+        brief: {
+          ...harness.state.brief,
+          version: 2,
+          approverActorId: "payer-updated",
+        },
+      }),
+    );
+    expect(await parties()).toMatchObject({
+      seller_id: null,
+      fulfiller_id: null,
+      payer_id: "payer-updated",
+    });
+    expectApplied(
+      await harness.submit({
+        kind: "activate",
+        taskId: `task-${harness.caseId}`,
+        maxModelCalls: 2,
+        maxToolCalls: 3,
+      }),
+    );
+    const task = harness.state.activeTask;
+    if (!task) throw new Error("Missing active task");
+    expectApplied(
+      await harness.submit({
+        kind: "agent_candidate",
+        candidate: {
+          task,
+          requirements: [
+            { id: "hotel", category: "accommodation", description: "One room near the event" },
+          ],
+        },
+      }),
+    );
+    expectApplied(
+      await harness.submit({
+        kind: "request_quote",
+        rfq: {
+          id: `rfq-${harness.caseId}`,
+          supplierId: "supplier-fixture",
+          briefVersion: 2,
+          requirementIds: ["hotel"],
+        },
+      }),
+    );
+    const quoteFor = (id: string, sellerId: string, fulfillerId: string) => ({
+      id,
+      version: 1,
+      tenantId,
+      caseId: harness.caseId,
+      rfqId: `rfq-${harness.caseId}`,
+      briefVersion: 2,
+      supplierId: "supplier-fixture",
+      sellerId,
+      fulfillerId,
+      payeeId: sellerId,
+      total: { amountMinor: 30000, currency: "GBP" },
+      validUntil: "2027-01-02T12:00:00Z",
+      availability: "quoted" as const,
+      evidenceRef: `synthetic:${id}`,
+    });
+    const quoteA = quoteFor(`quote-a-${harness.caseId}`, "seller-a", "fulfiller-a");
+    const quoteB = quoteFor(`quote-b-${harness.caseId}`, "seller-b", "fulfiller-b");
+    expectApplied(await harness.submit({ kind: "record_quote", quote: quoteA }));
+    expectApplied(await harness.submit({ kind: "record_quote", quote: quoteB }));
+    // Without a proposal yet, the latest quote for the current brief wins.
+    expect(await parties()).toMatchObject({
+      seller_id: "seller-b",
+      fulfiller_id: "fulfiller-b",
+    });
+    const proposalFor = (version: number, quote: typeof quoteA) => ({
+      id: `proposal-${harness.caseId}`,
+      version,
+      tenantId,
+      caseId: harness.caseId,
+      briefVersion: 2,
+      quoteId: quote.id,
+      quoteVersion: 1,
+      termsHash: `synthetic:terms-v${version}`,
+      total: quote.total,
+      validUntil: quote.validUntil,
+      approverActorId: "payer-updated",
+      scope: {
+        kind: "supplier_handoff" as const,
+        supplierId: quote.supplierId,
+        lineIds: [quote.id],
+      },
+    });
+    expectApplied(
+      await harness.submit({ kind: "stage_proposal", proposal: proposalFor(1, quoteB) }),
+    );
+    expect(await parties()).toMatchObject({
+      seller_id: "seller-b",
+      fulfiller_id: "fulfiller-b",
+    });
+    // A re-staged proposal re-selects its own quote; parties are never frozen
+    // on the first recorded quote.
+    expectApplied(
+      await harness.submit({ kind: "stage_proposal", proposal: proposalFor(2, quoteA) }),
+    );
+    expect(await parties()).toMatchObject({
+      seller_id: "seller-a",
+      fulfiller_id: "fulfiller-a",
+    });
   });
 
   it("serializes a concurrent approve vs cancel so exactly one applies", async () => {
