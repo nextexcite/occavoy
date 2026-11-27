@@ -39,6 +39,8 @@ jobs:
         run: pnpm verify:runtime
       - name: Real Pi Durable harness on Rivet
         run: pnpm verify:harness
+      - name: Recover an HTTP-activated Postgres case on native Rivet
+        run: pnpm verify:case-recovery
       - name: Verify no generated changes
         run: git diff --exit-code
 

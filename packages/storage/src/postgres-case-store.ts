@@ -851,7 +851,13 @@ export class PostgresCaseStore {
    */
   async claimPendingOutbox(
     limit: number,
-    options?: { tenantId?: string; caseId?: string; now?: Date; leaseTimeoutMs?: number },
+    options?: {
+      tenantId?: string;
+      caseId?: string;
+      now?: Date;
+      leaseTimeoutMs?: number;
+      intentKinds?: readonly string[];
+    },
   ): Promise<CaseOutboxRow[]> {
     const now = options?.now ?? new Date();
     const leaseTimeoutMs = options?.leaseTimeoutMs ?? DEFAULT_OUTBOX_LEASE_MS;
@@ -867,12 +873,20 @@ export class PostgresCaseStore {
          )
          AND ($2::text IS NULL OR tenant_id = $2)
          AND ($5::text IS NULL OR case_id = $5)
+         AND ($6::text[] IS NULL OR intent_kind = ANY($6::text[]))
          ORDER BY COALESCE(dispatched_at, available_at), id
          LIMIT $1
          FOR UPDATE SKIP LOCKED
        )
        RETURNING ${OUTBOX_COLUMNS}`,
-      [limit, options?.tenantId ?? null, now, staleBefore, options?.caseId ?? null],
+      [
+        limit,
+        options?.tenantId ?? null,
+        now,
+        staleBefore,
+        options?.caseId ?? null,
+        options?.intentKinds ?? null,
+      ],
     );
     return result.rows.map(outboxRow);
   }

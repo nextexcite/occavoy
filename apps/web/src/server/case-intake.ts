@@ -72,6 +72,7 @@ export function createCaseIntakeHandler(deps: {
     ): Promise<{ decision: CaseDecision; deduplicated: boolean }>;
   };
   now?: () => Date;
+  taskAllowance?: Readonly<{ maxModelCalls: number; maxToolCalls: number }>;
 }): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     if (new URL(request.url).pathname !== "/api/cases") {
@@ -132,8 +133,8 @@ export function createCaseIntakeHandler(deps: {
         caseId,
         expectedRevision: 0,
         taskId: `intake-${commandId}`,
-        maxModelCalls: 1,
-        maxToolCalls: 0,
+        maxModelCalls: deps.taskAllowance?.maxModelCalls ?? 1,
+        maxToolCalls: deps.taskAllowance?.maxToolCalls ?? 0,
       };
       const result = await deps.store.createAndActivateCase(input, command, {
         now: deps.now?.() ?? new Date(),
