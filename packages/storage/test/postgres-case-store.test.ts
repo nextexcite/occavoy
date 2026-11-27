@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readdirSync } from "node:fs";
 import { demoEvents } from "@occavoy/domain";
 import type {
   CaseAuthority,
@@ -343,16 +344,44 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
         applyMigrations(poolA),
         applyMigrations(poolB),
       ]);
-      expect([...appliedA, ...appliedB].sort()).toEqual(["001_quota", "002_case_core"]);
+      const versions = readdirSync(new URL("../sql/", import.meta.url))
+        .filter((file) => file.endsWith(".sql"))
+        .map((file) => file.slice(0, -4))
+        .sort();
+      expect([...appliedA, ...appliedB].sort()).toEqual(versions);
       const recorded = await pool.query(
         `SELECT version FROM ${schema}.schema_migrations ORDER BY version`,
       );
-      expect(recorded.rows.map((row) => row.version)).toEqual(["001_quota", "002_case_core"]);
+      expect(recorded.rows.map((row) => row.version)).toEqual(versions);
     } finally {
       await poolA.end();
       await poolB.end();
       await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
     }
+  });
+
+  it("allows the same agent request in different cases of one tenant", async () => {
+    const tenantId = tenant();
+    const ids = ["case-a", "case-b"];
+    for (const id of ids) {
+      const { harness } = await createCase(store, tenantId, id);
+      expectApplied(
+        await harness.submit({
+          kind: "activate",
+          taskId: "shared-task",
+          maxModelCalls: 1,
+          maxToolCalls: 0,
+        }),
+      );
+    }
+    const jobs = await pool.query(
+      `SELECT case_id, task_id, request_id FROM case_agent_jobs
+       WHERE tenant_id = $1 ORDER BY case_id`,
+      [tenantId],
+    );
+    expect(jobs.rows).toEqual(
+      ids.map((case_id) => ({ case_id, task_id: "shared-task", request_id: "shared-task" })),
+    );
   });
 
   it.each([
