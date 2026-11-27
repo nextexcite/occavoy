@@ -18,6 +18,7 @@ export type CasePhase =
   | "closed";
 export type CaseWaitReason =
   | "agent_task"
+  | "agent_intervention"
   | "supplier_quote"
   | "approval"
   | "supplier_confirmation"
@@ -58,6 +59,13 @@ export interface AgentTaskReference {
   maxToolCalls: number;
   deadline: string;
 }
+
+/** Evidence about why a bounded job ended without an accepted candidate. */
+export type AgentTaskStopReason =
+  | "budget_exhausted"
+  | "deadline_exceeded"
+  | "cancelled"
+  | "candidate_rejected";
 
 export interface ResourceRequirement {
   id: string;
@@ -136,6 +144,7 @@ export interface ProposalApproval {
 export type CasePermission =
   | "case.edit"
   | "agent.result"
+  | "agent.stop"
   | "supply.request"
   | "supply.record"
   | "proposal.write"
@@ -155,6 +164,25 @@ export interface CaseAuthority {
   validUntil: string;
 }
 
+export interface HandoffAttemptFence {
+  /** Supplier-generated freshness challenge for one successful fence; never parsed for meaning. */
+  fenceId: string;
+  clientReference: string;
+  attempt: number;
+  evidenceRef: string;
+}
+
+export interface RecordedHandoffAttemptFence extends HandoffAttemptFence {
+  recordedBy: string;
+  recordedAt: string;
+}
+
+/** Binds a terminal nonexecution observation to one fenced sender attempt. */
+export interface HandoffNonexecutionProof {
+  fenceId: string;
+  attempt: number;
+}
+
 export interface ExternalAction {
   id: string;
   clientReference: string;
@@ -165,12 +193,15 @@ export interface ExternalAction {
   attempts: number;
   providerReference: string | null;
   evidenceRefs: string[];
+  attemptFences: RecordedHandoffAttemptFence[];
   reconciliationEvidence: Array<{
     source: "provider_lookup" | "operator_verified";
     result: "confirmed" | "not_executed" | "unresolved";
     evidenceRef: string;
     recordedBy: string;
     recordedAt: string;
+    attempt?: number;
+    fenceId?: string;
   }>;
 }
 
@@ -197,6 +228,8 @@ export interface CaseSnapshot {
   cancelRequested: boolean;
   cancellationReason: string | null;
   outcome: "fulfilled" | "declined" | "unavailable" | "cancelled" | null;
+  /** Historical record of the most recent stopped task; never reopens spend authority. */
+  lastAgentTaskStop?: { taskId: string; reason: AgentTaskStopReason };
 }
 
 export type CaseCommandBody =
@@ -204,6 +237,7 @@ export type CaseCommandBody =
   | { kind: "cancel"; reason: string }
   | { kind: "revise_brief"; brief: CaseBrief }
   | { kind: "agent_candidate"; candidate: AgentTaskCandidate }
+  | { kind: "agent_task_stopped"; task: AgentTaskReference; reason: AgentTaskStopReason }
   | { kind: "request_quote"; rfq: CaseRfq }
   | { kind: "record_quote"; quote: CaseQuote }
   | { kind: "stage_proposal"; proposal: CaseProposal }
@@ -212,6 +246,7 @@ export type CaseCommandBody =
   | { kind: "dispatch_handoff"; actionId: string; clientReference: string; requestHash: string }
   | { kind: "retry_handoff"; actionId: string }
   | { kind: "handoff_unknown"; actionId: string; evidenceRef: string }
+  | { kind: "fence_handoff_attempt"; actionId: string; fence: HandoffAttemptFence }
   | {
       kind: "reconcile_handoff";
       actionId: string;
@@ -219,6 +254,7 @@ export type CaseCommandBody =
       source: "provider_lookup" | "operator_verified";
       evidenceRef: string;
       providerReference: string | null;
+      nonexecutionProof?: HandoffNonexecutionProof;
     }
   | { kind: "record_payment"; total: Money; evidenceRef: string }
   | { kind: "record_fulfillment"; evidenceRef: string }
@@ -249,6 +285,7 @@ const permissions: Record<CaseCommandBody["kind"], CasePermission> = {
   cancel: "case.edit",
   revise_brief: "case.edit",
   agent_candidate: "agent.result",
+  agent_task_stopped: "agent.stop",
   request_quote: "supply.request",
   record_quote: "supply.record",
   stage_proposal: "proposal.write",
@@ -257,6 +294,7 @@ const permissions: Record<CaseCommandBody["kind"], CasePermission> = {
   dispatch_handoff: "handoff.dispatch",
   retry_handoff: "handoff.dispatch",
   handoff_unknown: "supply.record",
+  fence_handoff_attempt: "action.reconcile",
   reconcile_handoff: "action.reconcile",
   record_payment: "fulfillment.record",
   record_fulfillment: "fulfillment.record",
@@ -522,6 +560,38 @@ export function decideCase(
       next.waitReason = null;
       break;
     }
+    case "agent_task_stopped": {
+      const task = command.task;
+      if (
+        current.phase !== "clarifying" ||
+        current.waitReason !== "agent_task" ||
+        !current.activeTask ||
+        current.activeTask.taskId !== task.taskId ||
+        current.activeTask.caseRevision !== task.caseRevision ||
+        current.brief.version !== task.briefVersion ||
+        current.scope.tenantId !== task.tenantId ||
+        current.scope.caseId !== task.caseId
+      ) {
+        return stop("stale_agent_task", "ignored");
+      }
+      if (
+        !["budget_exhausted", "deadline_exceeded", "cancelled", "candidate_rejected"].includes(
+          command.reason,
+        )
+      ) {
+        return stop("invalid_agent_task_stop");
+      }
+      if (
+        command.reason === "deadline_exceeded" &&
+        beforeExpiry(current.activeTask.deadline, now)
+      ) {
+        return stop("agent_task_not_expired");
+      }
+      next.activeTask = null;
+      next.waitReason = "agent_intervention";
+      next.lastAgentTaskStop = { taskId: task.taskId, reason: command.reason };
+      break;
+    }
     case "agent_candidate": {
       const task = command.candidate.task;
       if (
@@ -690,6 +760,7 @@ export function decideCase(
           attempts: 1,
           providerReference: null,
           evidenceRefs: [],
+          attemptFences: [],
           reconciliationEvidence: [],
         };
       }
@@ -714,6 +785,44 @@ export function decideCase(
       };
       next.waitReason = "reconciliation";
       break;
+    case "fence_handoff_attempt": {
+      if (
+        current.action?.id !== command.actionId ||
+        !["unknown", "dispatching"].includes(current.action.status)
+      ) {
+        return stop("action_not_reconcilable");
+      }
+      const fence = command.fence;
+      const fences = current.action.attemptFences ?? [];
+      if (
+        !fence.fenceId.trim() ||
+        !fence.evidenceRef.trim() ||
+        fence.clientReference !== current.action.clientReference ||
+        fence.attempt !== current.action.attempts ||
+        !Number.isInteger(fence.attempt) ||
+        fence.attempt < 1
+      ) {
+        return stop("invalid_attempt_fence");
+      }
+      if (fences.some((recorded) => recorded.fenceId === fence.fenceId)) {
+        return stop("duplicate_attempt_fence");
+      }
+      next.action = {
+        ...current.action,
+        status: "unknown",
+        evidenceRefs: [...current.action.evidenceRefs, fence.evidenceRef],
+        attemptFences: [
+          ...fences,
+          {
+            ...structuredClone(fence),
+            recordedBy: authority.actorId,
+            recordedAt: now.toISOString(),
+          },
+        ],
+      };
+      next.waitReason = "reconciliation";
+      break;
+    }
     case "reconcile_handoff":
       if (
         current.action?.id !== command.actionId ||
@@ -721,11 +830,29 @@ export function decideCase(
       ) {
         return stop("action_not_reconcilable");
       }
+      if (current.action.status === "dispatching" && command.result !== "confirmed") {
+        return stop("dispatch_still_in_flight");
+      }
       if (
         !command.evidenceRef.trim() ||
         (command.result === "confirmed" && !command.providerReference?.trim())
       ) {
         return stop("evidence_required");
+      }
+      if (command.result === "not_executed") {
+        const proof = command.nonexecutionProof;
+        const fence = (current.action.attemptFences ?? []).find(
+          (recorded) => recorded.fenceId === proof?.fenceId,
+        );
+        if (
+          !proof ||
+          proof.attempt !== current.action.attempts ||
+          !fence ||
+          fence.attempt !== current.action.attempts ||
+          fence.clientReference !== current.action.clientReference
+        ) {
+          return stop("terminal_nonexecution_proof_required");
+        }
       }
       next.action = {
         ...current.action,
@@ -740,6 +867,12 @@ export function decideCase(
             evidenceRef: command.evidenceRef,
             recordedBy: authority.actorId,
             recordedAt: now.toISOString(),
+            ...(command.nonexecutionProof
+              ? {
+                  attempt: command.nonexecutionProof.attempt,
+                  fenceId: command.nonexecutionProof.fenceId,
+                }
+              : {}),
           },
         ],
       };

@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: occavoy-postgres
+    ports:
+      - "127.0.0.1:54329:5432"
+    environment:
+      POSTGRES_USER: occavoy
+      POSTGRES_PASSWORD: occavoy
+      POSTGRES_DB: occavoy
+    volumes:
+      - occavoy_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U occavoy -d occavoy"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+
+volumes:
+  occavoy_pgdata:

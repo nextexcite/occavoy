@@ -18,6 +18,12 @@ A browser or another service must not bypass reservation with an unrestricted up
 
 Concurrent uploads at the cap, duplicate completion, uncertain write outcomes, and failed deletion are required tests. A pure arithmetic helper alone is not evidence of atomic enforcement in a deployed system.
 
+### Local Postgres inspection and recovery
+
+`PostgresQuotaLedger.getBudgetReport()` compares budget counters with reservation rows in one database snapshot. `activeReservations` counts `reserved` rows; `unknownReservations` counts ambiguous writes, whose bytes remain reserved. A zero `discrepancyBytes` means the database counters agree, not that R2 inventory has been verified.
+
+`reconcileExpiredReservations(now)` returns newly expired rows for inspection; it never refunds capacity. To recover outstanding work after a reconciler restart, read `object_reservation WHERE state = 'unknown'`, including `object_key`, `bytes`, `actual_bytes` and `reconciliation_note`. Verify the final object size before calling `commit(id, observedBytes)`. If the object is absent, rule out any pending write before calling `releaseVerifiedAbsent(id, evidenceNote)`. A known oversized object blocks new admissions until resolved. There is no automatic deletion or inventory scan here; keep uploads disabled pending R2 integration.
+
 ## Sandbox policy
 
 Use deterministic code and bounded API adapters by default. Enable isolated code or browser execution only for a demonstrated tool requirement. Rivet remains the case owner and records the tool's request, allowance, deadline, and result.

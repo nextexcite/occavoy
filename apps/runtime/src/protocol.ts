@@ -59,5 +59,11 @@ export function readRuntimeConfig(env: NodeJS.ProcessEnv) {
   ) {
     throw new Error("OCCAVOY_PROBE_HOLD is only a local test fault injection.");
   }
-  return { mode, demoToken, port, probeHold: probeHold as "safe" | "unsafe" | undefined } as const;
+  return {
+    mode,
+    demoToken,
+    port,
+    probeHold: probeHold as "safe" | "unsafe" | undefined,
+    databaseUrl: env.DATABASE_URL,
+  } as const;
 }
