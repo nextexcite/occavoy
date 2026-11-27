@@ -46,7 +46,9 @@ Keep this file as the common instruction entry point. Do not regenerate `CLAUDE.
 
 - Prefer a separate branch or worktree for independent tasks. In a shared worktree, agree file ownership before editing.
 - Do not revert, reset, clean, reformat, or stage another contributor's changes incidentally. An explicitly assigned integrator may assemble agreed changes.
-- Keep commits focused. State dependencies and unresolved questions in the handoff; do not mark cloud deployment, supplier integration, or an external issue complete without evidence.
+- Keep commits focused and commit in meaningful, logically self-contained steps rather than bundling unrelated changes.
+- When introducing a substantial feature or fix, open a GitHub pull request and invoke Codex review on the PR (`@codex review`) before merging.
+- State dependencies and unresolved questions in the handoff; do not mark cloud deployment, supplier integration, or an external issue complete without evidence.
 - Keep public handoffs reproducible: issue reference, paths changed, commands run, observed results, and remaining blockers. Do not copy private conversation history into the repository.
 
 ## Verification
