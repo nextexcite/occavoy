@@ -35,6 +35,7 @@ const PERMISSIONS: Record<CaseCommandBody["kind"], CasePermission> = {
   dispatch_handoff: "handoff.dispatch",
   retry_handoff: "handoff.dispatch",
   handoff_unknown: "supply.record",
+  fence_handoff_attempt: "action.reconcile",
   reconcile_handoff: "action.reconcile",
   record_payment: "fulfillment.record",
   record_fulfillment: "fulfillment.record",
@@ -293,16 +294,30 @@ async function runJourney(harness: Harness) {
 
 RUN_DB("postgres case store (requires DATABASE_URL)", () => {
   let pool: pg.Pool;
+  let admin: pg.Pool;
   let store: PostgresCaseStore;
+  const schema = `oca4_${randomUUID().replaceAll("-", "")}`;
 
   beforeAll(async () => {
-    pool = new pg.Pool({ connectionString: DATABASE_URL });
+    admin = new pg.Pool({ connectionString: DATABASE_URL });
+    const create = await admin.query("SELECT format('CREATE SCHEMA %I', $1::text) AS ddl", [
+      schema,
+    ]);
+    await admin.query(create.rows[0].ddl);
+    pool = new pg.Pool({ connectionString: DATABASE_URL, options: `-c search_path=${schema}` });
     store = new PostgresCaseStore(pool);
     await applyMigrations(pool);
   });
 
   afterAll(async () => {
-    await pool.end();
+    await pool?.end();
+    if (admin) {
+      const drop = await admin.query("SELECT format('DROP SCHEMA %I CASCADE', $1::text) AS ddl", [
+        schema,
+      ]);
+      await admin.query(drop.rows[0].ddl);
+      await admin.end();
+    }
   });
 
   const tenant = () => `test-${randomUUID()}`;
@@ -310,7 +325,7 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
   it("applies migrations idempotently and rolls a failing migration back cleanly", async () => {
     const recorded = await pool.query("SELECT version FROM schema_migrations ORDER BY version");
     expect(recorded.rows.map((row) => row.version)).toEqual(
-      expect.arrayContaining(["001_quota", "002_case_core"]),
+      expect.arrayContaining(["001_quota", "002_case_core", "003_attempt_fences"]),
     );
     expect(await applyMigrations(pool)).toEqual([]);
     const client = await pool.connect();

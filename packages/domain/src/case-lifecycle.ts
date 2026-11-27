@@ -155,6 +155,25 @@ export interface CaseAuthority {
   validUntil: string;
 }
 
+export interface HandoffAttemptFence {
+  /** Supplier-generated freshness challenge for one successful fence; never parsed for meaning. */
+  fenceId: string;
+  clientReference: string;
+  attempt: number;
+  evidenceRef: string;
+}
+
+export interface RecordedHandoffAttemptFence extends HandoffAttemptFence {
+  recordedBy: string;
+  recordedAt: string;
+}
+
+/** Binds a terminal nonexecution observation to one fenced sender attempt. */
+export interface HandoffNonexecutionProof {
+  fenceId: string;
+  attempt: number;
+}
+
 export interface ExternalAction {
   id: string;
   clientReference: string;
@@ -165,12 +184,15 @@ export interface ExternalAction {
   attempts: number;
   providerReference: string | null;
   evidenceRefs: string[];
+  attemptFences: RecordedHandoffAttemptFence[];
   reconciliationEvidence: Array<{
     source: "provider_lookup" | "operator_verified";
     result: "confirmed" | "not_executed" | "unresolved";
     evidenceRef: string;
     recordedBy: string;
     recordedAt: string;
+    attempt?: number;
+    fenceId?: string;
   }>;
 }
 
@@ -212,6 +234,7 @@ export type CaseCommandBody =
   | { kind: "dispatch_handoff"; actionId: string; clientReference: string; requestHash: string }
   | { kind: "retry_handoff"; actionId: string }
   | { kind: "handoff_unknown"; actionId: string; evidenceRef: string }
+  | { kind: "fence_handoff_attempt"; actionId: string; fence: HandoffAttemptFence }
   | {
       kind: "reconcile_handoff";
       actionId: string;
@@ -219,6 +242,7 @@ export type CaseCommandBody =
       source: "provider_lookup" | "operator_verified";
       evidenceRef: string;
       providerReference: string | null;
+      nonexecutionProof?: HandoffNonexecutionProof;
     }
   | { kind: "record_payment"; total: Money; evidenceRef: string }
   | { kind: "record_fulfillment"; evidenceRef: string }
@@ -257,6 +281,7 @@ const permissions: Record<CaseCommandBody["kind"], CasePermission> = {
   dispatch_handoff: "handoff.dispatch",
   retry_handoff: "handoff.dispatch",
   handoff_unknown: "supply.record",
+  fence_handoff_attempt: "action.reconcile",
   reconcile_handoff: "action.reconcile",
   record_payment: "fulfillment.record",
   record_fulfillment: "fulfillment.record",
@@ -690,6 +715,7 @@ export function decideCase(
           attempts: 1,
           providerReference: null,
           evidenceRefs: [],
+          attemptFences: [],
           reconciliationEvidence: [],
         };
       }
@@ -714,6 +740,44 @@ export function decideCase(
       };
       next.waitReason = "reconciliation";
       break;
+    case "fence_handoff_attempt": {
+      if (
+        current.action?.id !== command.actionId ||
+        !["unknown", "dispatching"].includes(current.action.status)
+      ) {
+        return stop("action_not_reconcilable");
+      }
+      const fence = command.fence;
+      const fences = current.action.attemptFences ?? [];
+      if (
+        !fence.fenceId.trim() ||
+        !fence.evidenceRef.trim() ||
+        fence.clientReference !== current.action.clientReference ||
+        fence.attempt !== current.action.attempts ||
+        !Number.isInteger(fence.attempt) ||
+        fence.attempt < 1
+      ) {
+        return stop("invalid_attempt_fence");
+      }
+      if (fences.some((recorded) => recorded.fenceId === fence.fenceId)) {
+        return stop("duplicate_attempt_fence");
+      }
+      next.action = {
+        ...current.action,
+        status: "unknown",
+        evidenceRefs: [...current.action.evidenceRefs, fence.evidenceRef],
+        attemptFences: [
+          ...fences,
+          {
+            ...structuredClone(fence),
+            recordedBy: authority.actorId,
+            recordedAt: now.toISOString(),
+          },
+        ],
+      };
+      next.waitReason = "reconciliation";
+      break;
+    }
     case "reconcile_handoff":
       if (
         current.action?.id !== command.actionId ||
@@ -721,11 +785,29 @@ export function decideCase(
       ) {
         return stop("action_not_reconcilable");
       }
+      if (current.action.status === "dispatching" && command.result !== "confirmed") {
+        return stop("dispatch_still_in_flight");
+      }
       if (
         !command.evidenceRef.trim() ||
         (command.result === "confirmed" && !command.providerReference?.trim())
       ) {
         return stop("evidence_required");
+      }
+      if (command.result === "not_executed") {
+        const proof = command.nonexecutionProof;
+        const fence = (current.action.attemptFences ?? []).find(
+          (recorded) => recorded.fenceId === proof?.fenceId,
+        );
+        if (
+          !proof ||
+          proof.attempt !== current.action.attempts ||
+          !fence ||
+          fence.attempt !== current.action.attempts ||
+          fence.clientReference !== current.action.clientReference
+        ) {
+          return stop("terminal_nonexecution_proof_required");
+        }
       }
       next.action = {
         ...current.action,
@@ -740,6 +822,12 @@ export function decideCase(
             evidenceRef: command.evidenceRef,
             recordedBy: authority.actorId,
             recordedAt: now.toISOString(),
+            ...(command.nonexecutionProof
+              ? {
+                  attempt: command.nonexecutionProof.attempt,
+                  fenceId: command.nonexecutionProof.fenceId,
+                }
+              : {}),
           },
         ],
       };
