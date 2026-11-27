@@ -1,9 +1,5 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  test: {
-    include: ["packages/*/test/**/*.test.ts"],
-    environment: "node",
-    setupFiles: ["./scripts/load-local-env.mjs"],
-  },
+  test: { include: ["packages/*/test/**/*.test.ts"], environment: "node" },
 });

@@ -42,19 +42,6 @@ MCP servers are optional interfaces. Use approved connectors, CLIs, SDKs, or ord
 
 Keep this file as the common instruction entry point. Do not regenerate `CLAUDE.md` or `GEMINI.md` bridge files.
 
-## Secrets and environment configuration
-
-The toolchain is **mise** (tool versions, including fnox itself), **fnox** (project secret references and encrypted profiles), **Doppler** (canonical secret store), and optionally **direnv** (deterministic, side-effect-free `.envrc` only — never global shell activation or network access on directory entry). See [environment.md](docs/environment.md) for the full lifecycle.
-
-- Doppler is the canonical source of every environment variable and credential. There is no reverse sync into Doppler and no copying dotenv files between machines or worktrees.
-- `fnox.toml` is committed and is the value-free mapping: exact source Doppler project/config, selected variable names, profile, and output file. Never commit age identities, plaintext exports, or decrypted files.
-- Profiles are lowercase kebab-case and map to the project's actual Doppler configs: `local` for the local development cycle, plus `dev`, `staging`, and `production` only when the project genuinely operates them. Occavoy currently operates `local` only; do not invent environment aliases.
-- The project uses its own project-specific age keypair as its recipient identity — not a machine, personal, or recovery key. The private key is delivered through the machine or sandbox environment, never through Git, chat, or patches. A cloud sandbox with the key in its environment decrypts the published ciphertext and starts work without any interactive secret entry.
-- Consumption is dotenv-first: an explicit refresh materializes an ignored local env file, and ordinary development reads that file. Keep secret values out of agent-visible output; verify with presence checks (`fnox check`/`fnox scan`), never by printing values.
-- Missing access fails closed and is reported by variable name. Do not select another project's source, broaden a profile, or self-grant access to make a check pass.
-
-The `local` profile mapping, refresh lane, and `fnox exec` injection are implemented; the portable ciphertext-publication lane for cloud sandboxes is pending the key-custody decision in Linear OCA-35 — do not implement it opportunistically. [environment.md](docs/environment.md) records exactly which parts exist.
-
 ## Concurrent work
 
 - Prefer a separate branch or worktree for independent tasks. In a shared worktree, agree file ownership before editing.
