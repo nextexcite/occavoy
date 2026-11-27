@@ -54,6 +54,8 @@ export type UsageReservationResult =
       allowance: CaseAllowance;
     };
 
+type UsageRejection = "budget_exhausted" | "allowance_closed";
+
 export interface CaseUsageRow {
   id: string;
   tenantId: string;
@@ -231,7 +233,10 @@ export class PostgresUsageLedger {
         );
       }
       let admitted = false;
-      let rejection: "budget_exhausted" | "allowance_closed" | null = null;
+      let rejection: UsageRejection | null = null;
+      let taskRejection: "task_authority_inactive" | "task_limit_exceeded" | null = null;
+      const taskId = input.taskId ?? null;
+      const taskBound = typeof taskId === "string" && taskId.trim().length > 0;
       if (input.kind === "reconciliation_lookup") {
         admitted = before.status !== "closed";
         if (!admitted) rejection = "allowance_closed";
@@ -240,13 +245,46 @@ export class PostgresUsageLedger {
       } else if (before.status === "paused_budget") {
         rejection = "budget_exhausted";
       } else {
+        let taskLimit: number | null = null;
+        let taskUsed = 0;
+        if (taskBound) {
+          const job = await client.query(
+            `SELECT max_model_calls, max_tool_calls
+             FROM case_agent_jobs
+             WHERE tenant_id = $1 AND case_id = $2 AND task_id = $3 AND status = 'running'
+             FOR UPDATE`,
+            [input.tenantId, input.caseId, taskId],
+          );
+          if (job.rowCount === 0) {
+            taskRejection = "task_authority_inactive";
+          } else {
+            taskLimit = Number(
+              input.kind === "model_call"
+                ? job.rows[0].max_model_calls
+                : job.rows[0].max_tool_calls,
+            );
+            const usage = await client.query(
+              `SELECT COALESCE(SUM(quantity), 0)::bigint AS used
+               FROM case_usage_ledger
+               WHERE tenant_id = $1 AND case_id = $2 AND task_id = $3 AND kind = $4
+                 AND metadata ->> 'admitted' = 'true'`,
+              [input.tenantId, input.caseId, taskId, input.kind],
+            );
+            taskUsed = Number(usage.rows[0].used);
+            if (taskUsed + input.quantity > taskLimit) {
+              taskRejection = "task_limit_exceeded";
+            }
+          }
+        }
+
         const countExceeded =
           input.kind === "model_call"
             ? before.usedModelCalls + input.quantity > before.maxModelCalls
             : before.usedToolCalls + input.quantity > before.maxToolCalls;
         const costExceeded =
           before.maxCostMinor !== null && before.usedCostMinor + costMinor > before.maxCostMinor;
-        if (countExceeded || costExceeded) {
+        const caseExceeded = countExceeded || costExceeded;
+        if (caseExceeded) {
           rejection = "budget_exhausted";
           await client.query(
             `UPDATE case_allowances
@@ -254,6 +292,8 @@ export class PostgresUsageLedger {
              WHERE tenant_id = $1 AND case_id = $2`,
             [input.tenantId, input.caseId],
           );
+        } else if (taskRejection) {
+          rejection = "budget_exhausted";
         } else {
           admitted = true;
         }
@@ -281,6 +321,7 @@ export class PostgresUsageLedger {
         ...(input.metadata ?? {}),
         admitted,
         rejectionReason: rejection,
+        rejectionDetail: taskRejection,
       };
       await client.query(
         `INSERT INTO case_usage_ledger
