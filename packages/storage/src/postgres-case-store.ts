@@ -679,8 +679,8 @@ export class PostgresCaseStore {
         `INSERT INTO case_external_actions
            (tenant_id, id, case_id, client_reference, request_hash, proposal_id,
             proposal_version, status, attempts, provider_reference,
-            evidence_refs, reconciliation_evidence)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+            evidence_refs, attempt_fences, reconciliation_evidence)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
           tenantId,
           action.id,
@@ -693,6 +693,7 @@ export class PostgresCaseStore {
           action.attempts,
           action.providerReference,
           canonicalJson(action.evidenceRefs),
+          canonicalJson(action.attemptFences ?? []),
           canonicalJson(action.reconciliationEvidence),
         ],
       );
@@ -705,7 +706,8 @@ export class PostgresCaseStore {
       await client.query(
         `UPDATE case_external_actions
          SET status = $4, attempts = $5, provider_reference = $6,
-             evidence_refs = $7, reconciliation_evidence = $8, updated_at = now()
+             evidence_refs = $7, attempt_fences = $8, reconciliation_evidence = $9,
+             updated_at = now()
          WHERE tenant_id = $1 AND id = $2 AND case_id = $3`,
         [
           tenantId,
@@ -715,6 +717,7 @@ export class PostgresCaseStore {
           action.attempts,
           action.providerReference,
           canonicalJson(action.evidenceRefs),
+          canonicalJson(action.attemptFences ?? []),
           canonicalJson(action.reconciliationEvidence),
         ],
       );

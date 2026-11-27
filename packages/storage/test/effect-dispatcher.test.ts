@@ -44,7 +44,11 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
     await admin.end();
   });
 
-  async function setup(fault: SupplierFault = "dropResponseAfterAccept", lookup = true) {
+  async function setup(
+    fault: SupplierFault = "dropResponseAfterAccept",
+    lookup = true,
+    idempotency = lookup,
+  ) {
     // Reuse the public London fixture's immutable terms, not its action or final state.
     const { relationship, closedCase: fixture } = runCaseJourneyFixture();
     const tenantId = `synthetic-${randomUUID()}`;
@@ -74,7 +78,7 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
         destinations: ["GB"],
         currencies: ["GBP"],
         supportsLookup: lookup,
-        supportsIdempotency: lookup,
+        supportsIdempotency: idempotency,
         supportsCancel: false,
       },
       fault,
@@ -189,10 +193,12 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
     });
     expect(payment).toMatchObject({ booking: "pending", payment: "paid", fulfillment: "pending" });
     const recovered = new DeterministicEffectDispatcher(new PostgresCaseStore(pool), supplier);
+    const fenceSpy = vi.spyOn(supplier, "fenceHandoffAttempt");
     await expect(recovered.dispatchApprovedHandoff(input)).rejects.toThrow(
       "reconciliation_required",
     );
     await recovered.reconcileUnknownAction(input);
+    expect(fenceSpy).not.toHaveBeenCalled();
     expect(await state()).toMatchObject({
       action: {
         status: "confirmed",
@@ -370,12 +376,14 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
         "fence unavailable",
       );
       expect((await state()).action?.status).toBe("dispatching");
-      await expect(recovered.recoverInterruptedDispatch(target)).resolves.toMatchObject({
-        action: {
-          status: "unknown",
-          evidenceRefs: [`synthetic:sender-fenced:${input.clientReference}:1`],
-        },
-      });
+      const interrupted = await recovered.recoverInterruptedDispatch(target);
+      expect(interrupted.action).toMatchObject({ status: "unknown", attempts: 1 });
+      expect(interrupted.action?.attemptFences).toMatchObject([
+        { clientReference: input.clientReference, attempt: 1 },
+      ]);
+      expect(interrupted.action?.evidenceRefs).toEqual([
+        interrupted.action?.attemptFences[0]?.evidenceRef,
+      ]);
       await expect(recovered.retryApprovedHandoff(target)).rejects.toThrow(
         "reconciliation_required",
       );
@@ -426,12 +434,21 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
     await paused;
     const target = { ...input, attempt: 1 };
     try {
-      await dispatcher.recoverInterruptedDispatch(target);
+      const fenced = await dispatcher.fenceActionAttempt(target);
+      await expect(
+        dispatcher.recordOperatorReconciliation({
+          ...input,
+          result: "not_executed",
+          providerReference: null,
+          evidenceRef: "synthetic:stale-operator-assertion",
+        }),
+      ).rejects.toThrow("terminal_nonexecution_proof_required");
       await dispatcher.recordOperatorReconciliation({
         ...input,
         result: "not_executed",
         providerReference: null,
         evidenceRef: "synthetic:operator-verified-absent",
+        nonexecutionProof: { fenceId: fenced.fence.fenceId, attempt: 1 },
       });
       await dispatcher.retryApprovedHandoff(target);
     } finally {
@@ -439,6 +456,177 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
     }
     await expect(oldSender).rejects.toThrow("action_attempt_changed");
     expect(supplier.submitCalls).toBe(2);
+    expect(supplier.orderCount).toBe(1);
+  });
+
+  it("fences a timeout before acceptance; retry and the delayed sender produce exactly one order", async () => {
+    const { input, supplier, dispatcher } = await setup("none", true, false);
+    let releaseOriginal!: () => void;
+    const originalReleased = new Promise<void>((resolve) => {
+      releaseOriginal = resolve;
+    });
+    let originalCompletion: Promise<void> = Promise.resolve();
+    let originalError: unknown;
+    const send = supplier.submitHandoff.bind(supplier);
+    vi.spyOn(supplier, "submitHandoff").mockImplementationOnce(async (request) => {
+      // The client-side response times out while the provider-side request remains in flight.
+      originalCompletion = (async () => {
+        await originalReleased;
+        await send(request).catch((error) => {
+          originalError = error;
+        });
+      })();
+      throw new Error("synthetic:client-timeout");
+    });
+    const unknown = await dispatcher.dispatchApprovedHandoff(input);
+    expect(unknown.action).toMatchObject({ status: "unknown", attempts: 1 });
+    expect(supplier.orderCount).toBe(0);
+    expect(supplier.submitCalls).toBe(0);
+
+    const settled = await dispatcher.reconcileUnknownAction(input);
+    if ("needsOperatorReconciliation" in settled)
+      throw new Error("lookup unexpectedly unsupported");
+    const fence = settled.action?.attemptFences.at(-1);
+    expect(settled.action).toMatchObject({ status: "not_executed", attempts: 1 });
+    expect(fence).toMatchObject({ clientReference: input.clientReference, attempt: 1 });
+    expect(settled.action?.reconciliationEvidence.at(-1)).toMatchObject({
+      result: "not_executed",
+      source: "provider_lookup",
+      attempt: 1,
+      fenceId: fence?.fenceId,
+    });
+    const persisted = await pool.query(
+      `SELECT attempt_fences FROM case_external_actions
+       WHERE tenant_id = $1 AND id = $2`,
+      [input.tenantId, input.actionId],
+    );
+    expect(persisted.rows[0]?.attempt_fences.at(-1)).toMatchObject({
+      fenceId: fence?.fenceId,
+      clientReference: input.clientReference,
+      attempt: 1,
+    });
+
+    await dispatcher.retryApprovedHandoff({ ...input, attempt: 1 });
+    expect(supplier.orderCount).toBe(1);
+    expect(supplier.submitCalls).toBe(1);
+    releaseOriginal();
+    await originalCompletion;
+    expect(originalError).toBeInstanceOf(Error);
+    expect((originalError as Error).message).toBe("synthetic:attempt-fenced");
+    expect(supplier.submitCalls).toBe(2);
+    expect(supplier.orderCount).toBe(1);
+  });
+
+  it("acceptance between the first lookup and the fence reconciles confirmed rather than retrying", async () => {
+    const { input, supplier, dispatcher } = await setup("none", true, false);
+    let releaseAcceptance!: () => void;
+    const acceptanceAllowed = new Promise<void>((resolve) => {
+      releaseAcceptance = resolve;
+    });
+    let acceptanceCompleted: Promise<unknown> = Promise.resolve();
+    const send = supplier.submitHandoff.bind(supplier);
+    vi.spyOn(supplier, "submitHandoff").mockImplementationOnce(async (request) => {
+      acceptanceCompleted = (async () => {
+        await acceptanceAllowed;
+        return send(request);
+      })();
+      throw new Error("synthetic:client-timeout");
+    });
+    const lookup = supplier.lookupByClientReference.bind(supplier);
+    let lookups = 0;
+    vi.spyOn(supplier, "lookupByClientReference").mockImplementation(async (clientReference) => {
+      lookups += 1;
+      if (lookups === 1) return { found: false };
+      return lookup(clientReference);
+    });
+    const fence = supplier.fenceHandoffAttempt.bind(supplier);
+    vi.spyOn(supplier, "fenceHandoffAttempt").mockImplementationOnce(async (target) => {
+      // The first negative lookup has already returned when this in-flight request is accepted.
+      releaseAcceptance();
+      await acceptanceCompleted;
+      return fence(target);
+    });
+
+    await dispatcher.dispatchApprovedHandoff(input);
+    const reconciled = await dispatcher.reconcileUnknownAction(input);
+    if ("needsOperatorReconciliation" in reconciled) {
+      throw new Error("lookup unexpectedly unsupported");
+    }
+    expect(reconciled.action).toMatchObject({
+      status: "confirmed",
+      attempts: 1,
+      providerReference: "synthetic:order:1",
+    });
+    expect(reconciled.action?.attemptFences).toHaveLength(1);
+    await expect(dispatcher.retryApprovedHandoff({ ...input, attempt: 1 })).rejects.toThrow(
+      "proof_of_nonexecution_required",
+    );
+    expect(supplier.submitCalls).toBe(1);
+    expect(supplier.orderCount).toBe(1);
+  });
+
+  it.each([
+    { mode: "failed", error: "fence unavailable" },
+    { mode: "missing", error: "dispatch_fence_unavailable" },
+  ] as const)("a $mode fence holds UNKNOWN and blocks retry", async ({ mode, error }) => {
+    const { input, supplier, dispatcher, state } = await setup("rejectBeforeAccept", true, false);
+    await dispatcher.dispatchApprovedHandoff(input);
+    expect((await state()).action?.status).toBe("unknown");
+    if (mode === "failed") {
+      vi.spyOn(supplier, "fenceHandoffAttempt").mockRejectedValueOnce(new Error(error));
+    } else {
+      Object.defineProperty(supplier, "fenceHandoffAttempt", { value: undefined });
+    }
+
+    await expect(dispatcher.reconcileUnknownAction(input)).rejects.toThrow(error);
+    expect((await state()).action).toMatchObject({ status: "unknown", attempts: 1 });
+    await expect(dispatcher.retryApprovedHandoff({ ...input, attempt: 1 })).rejects.toThrow(
+      "reconciliation_required",
+    );
+    expect(supplier.orderCount).toBe(0);
+  });
+
+  it("operator nonexecution evidence must cite the current recorded attempt fence", async () => {
+    const { input, supplier, dispatcher, state } = await setup("none", false);
+    vi.spyOn(supplier, "submitHandoff").mockImplementationOnce(async () => {
+      throw new Error("synthetic:connection-refused-before-acceptance");
+    });
+    await dispatcher.dispatchApprovedHandoff(input);
+    const operator = {
+      ...input,
+      authority: { ...input.authority, actorId: "operator-1", grantId: "operator-grant" },
+    };
+    const staleProof = { fenceId: "synthetic:assertion-before-fence", attempt: 1 };
+    await expect(
+      dispatcher.recordOperatorReconciliation({
+        ...operator,
+        result: "not_executed",
+        providerReference: null,
+        evidenceRef: "synthetic:stale-negative",
+        nonexecutionProof: staleProof,
+      }),
+    ).rejects.toThrow("terminal_nonexecution_proof_required");
+    await expect(dispatcher.retryApprovedHandoff({ ...input, attempt: 1 })).rejects.toThrow(
+      "reconciliation_required",
+    );
+
+    const fenced = await dispatcher.fenceActionAttempt({ ...operator, attempt: 1 });
+    const verified = await dispatcher.recordOperatorReconciliation({
+      ...operator,
+      result: "not_executed",
+      providerReference: null,
+      evidenceRef: "synthetic:operator-verified-after-fence",
+      nonexecutionProof: { fenceId: fenced.fence.fenceId, attempt: 1 },
+    });
+    expect(verified.action).toMatchObject({ status: "not_executed", attempts: 1 });
+    expect(verified.action?.reconciliationEvidence.at(-1)).toMatchObject({
+      source: "operator_verified",
+      result: "not_executed",
+      attempt: 1,
+      fenceId: fenced.fence.fenceId,
+    });
+    expect((await state()).booking).toBe("not_booked");
+    await dispatcher.retryApprovedHandoff({ ...input, attempt: 1 });
     expect(supplier.orderCount).toBe(1);
   });
 

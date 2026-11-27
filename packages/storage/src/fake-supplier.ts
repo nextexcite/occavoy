@@ -1,4 +1,5 @@
-import type { CaseProposal } from "@occavoy/domain/case-lifecycle";
+import { randomUUID } from "node:crypto";
+import type { CaseProposal, HandoffAttemptFence } from "@occavoy/domain/case-lifecycle";
 
 export interface SupplierCapabilityDeclaration {
   supplierId: string;
@@ -34,8 +35,10 @@ export interface SupplierAdapter {
   lookupByClientReference(clientReference: string): Promise<SupplierLookup>;
   /** Optional supplier-side fence. On success no send through this attempt (including
    * an in-flight request) can subsequently create an order. Already accepted orders
-   * remain visible to reconciliation. A local lease timeout is not such a fence. */
-  fenceHandoffAttempt?(target: HandoffAttempt): Promise<{ evidenceRef: string }>;
+   * remain visible to reconciliation. `fenceId` must be unique to this successful
+   * fence and not predictable beforehand; it is a freshness challenge, not a string
+   * to parse. A local lease timeout is not such a fence. */
+  fenceHandoffAttempt?(target: HandoffAttempt): Promise<HandoffAttemptFence>;
 }
 
 export class UnsupportedCapabilityError extends Error {}
@@ -64,7 +67,13 @@ export class FakeSupplierAdapter implements SupplierAdapter {
   async fenceHandoffAttempt({ clientReference, attempt }: HandoffAttempt) {
     const previous = this.fencedThrough.get(clientReference) ?? 0;
     this.fencedThrough.set(clientReference, Math.max(previous, attempt));
-    return { evidenceRef: `synthetic:sender-fenced:${clientReference}:${attempt}` };
+    const fenceId = `synthetic:fence:${randomUUID()}`;
+    return {
+      fenceId,
+      clientReference,
+      attempt,
+      evidenceRef: `synthetic:sender-fenced:${fenceId}`,
+    };
   }
 
   async submitHandoff(request: HandoffRequest) {

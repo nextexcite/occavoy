@@ -4,6 +4,8 @@ import type {
   CaseCommandBody,
   CasePermission,
   ExternalAction,
+  HandoffAttemptFence,
+  HandoffNonexecutionProof,
 } from "@occavoy/domain/case-lifecycle";
 import type { SupplierAdapter } from "./fake-supplier";
 import { hashCommandPayload, type PostgresCaseStore } from "./postgres-case-store";
@@ -16,7 +18,10 @@ interface ActionContext {
   /** Trusted, current grant supplied by the caller, not customer or agent input. */
   authority: CaseAuthority;
 }
-type Observation = Extract<CaseCommandBody, { kind: "reconcile_handoff" | "handoff_unknown" }>;
+type Observation = Extract<
+  CaseCommandBody,
+  { kind: "reconcile_handoff" | "handoff_unknown" | "fence_handoff_attempt" }
+>;
 type Reconciliation = Extract<Observation, { kind: "reconcile_handoff" }>;
 
 /** Only the fresh dispatch transaction may submit; a replayed outbox intent is not permission to send. */
@@ -109,31 +114,55 @@ export class DeterministicEffectDispatcher {
   }
 
   async recoverInterruptedDispatch(input: ActionContext & { attempt: number }) {
-    const action = await this.readAction(input, ["action.reconcile", "supply.record"]);
-    if (action.attempts !== input.attempt) throw new Error("action_attempt_changed");
+    const action = await this.readAction(input);
     if (action.status !== "dispatching") throw new Error("action_not_dispatching");
+    return (await this.fenceActionAttempt(input)).state;
+  }
+
+  /** Explicitly fence one sender attempt at the supplier, then persist that structured fact. */
+  async fenceActionAttempt(input: ActionContext & { attempt: number }) {
+    const action = await this.readAction(input);
+    if (action.attempts !== input.attempt) throw new Error("action_attempt_changed");
     if (!this.supplier.fenceHandoffAttempt) throw new Error("dispatch_fence_unavailable");
-    const { evidenceRef } = await this.supplier.fenceHandoffAttempt({
+    const fence = await this.supplier.fenceHandoffAttempt({
       clientReference: action.clientReference,
       attempt: action.attempts,
     });
-    // The fence revokes the right to send; it says nothing about prior acceptance.
-    return this.record(input, action, {
-      kind: "handoff_unknown",
+    if (!this.validFenceFor(action, fence)) throw new Error("supplier_fence_mismatch");
+    const state = await this.record(input, action, {
+      kind: "fence_handoff_attempt",
       actionId: action.id,
-      evidenceRef,
+      fence,
     });
+    return { state, fence };
   }
 
   async reconcileUnknownAction(input: ActionContext) {
     const action = await this.readAction(input);
     if (!this.supplier.capabilities.supportsLookup)
       return { needsOperatorReconciliation: true } as const;
-    const lookup = await this.supplier.lookupByClientReference(action.clientReference);
+    const initialLookup = await this.supplier.lookupByClientReference(action.clientReference);
+    // Positive evidence is already terminal acceptance evidence, including for a
+    // dispatching action whose timeout was never locally persisted.
+    if (initialLookup.found) {
+      return this.record(input, action, {
+        kind: "reconcile_handoff",
+        actionId: action.id,
+        result: "confirmed",
+        source: "provider_lookup",
+        providerReference: initialLookup.providerReference,
+        evidenceRef: `supplier-lookup:${action.clientReference}`,
+      });
+    }
     // A dispatcher could still be in flight. A negative lookup at that point
     // is not proof that its submission won't arrive a moment later.
-    if (!lookup.found && action.status === "dispatching")
-      throw new Error("dispatch_still_in_flight");
+    if (action.status === "dispatching") throw new Error("dispatch_still_in_flight");
+
+    // A negative lookup before the fence can race provider acceptance. Fence this
+    // exact attempt at the supplier, persist the fence, then perform a fresh
+    // authoritative lookup. The first negative answer is never reused.
+    const { fence } = await this.fenceActionAttempt({ ...input, attempt: action.attempts });
+    const lookup = await this.supplier.lookupByClientReference(action.clientReference);
     return this.record(input, action, {
       kind: "reconcile_handoff",
       actionId: action.id,
@@ -141,17 +170,38 @@ export class DeterministicEffectDispatcher {
       source: "provider_lookup",
       providerReference: lookup.found ? lookup.providerReference : null,
       evidenceRef: `supplier-lookup:${action.clientReference}`,
+      ...(lookup.found
+        ? {}
+        : { nonexecutionProof: { fenceId: fence.fenceId, attempt: fence.attempt } }),
     });
   }
 
   async recordOperatorReconciliation(
-    input: ActionContext & Pick<Reconciliation, "result" | "providerReference" | "evidenceRef">,
+    input: ActionContext &
+      Pick<Reconciliation, "result" | "providerReference" | "evidenceRef"> & {
+        nonexecutionProof?: HandoffNonexecutionProof;
+      },
   ) {
     const action = await this.readAction(input);
     // After a process loss the timeout itself may not have been recorded. Positive
     // evidence can settle that action, but an in-flight send must not be unlocked.
     if (action.status === "dispatching" && input.result !== "confirmed")
       throw new Error("dispatch_still_in_flight");
+    if (input.result === "not_executed") {
+      const proof = input.nonexecutionProof;
+      const fence = (action.attemptFences ?? []).find(
+        (recorded) => recorded.fenceId === proof?.fenceId,
+      );
+      if (
+        !proof ||
+        proof.attempt !== action.attempts ||
+        !fence ||
+        fence.attempt !== action.attempts ||
+        fence.clientReference !== action.clientReference
+      ) {
+        throw new Error("terminal_nonexecution_proof_required");
+      }
+    }
     return this.record(input, action, {
       kind: "reconcile_handoff",
       source: "operator_verified",
@@ -159,7 +209,20 @@ export class DeterministicEffectDispatcher {
       result: input.result,
       providerReference: input.providerReference,
       evidenceRef: input.evidenceRef,
+      ...(input.nonexecutionProof ? { nonexecutionProof: input.nonexecutionProof } : {}),
     });
+  }
+
+  private validFenceFor(action: ExternalAction, fence: HandoffAttemptFence) {
+    return (
+      fence &&
+      typeof fence.fenceId === "string" &&
+      Boolean(fence.fenceId.trim()) &&
+      typeof fence.evidenceRef === "string" &&
+      Boolean(fence.evidenceRef.trim()) &&
+      fence.clientReference === action.clientReference &&
+      fence.attempt === action.attempts
+    );
   }
 
   private async readCase(input: ActionContext, permissions: CasePermission[]) {
