@@ -435,6 +435,25 @@ export function createServiceCase(input: {
   });
 }
 
+/** The scope/authority guard shared by decideCase and the atomic create+activate boundary. */
+export function hasCaseCommandAuthority(
+  scope: Pick<CaseScope, "tenantId" | "caseId">,
+  command: CaseCommand,
+  context: { authority: CaseAuthority; now: Date },
+): boolean {
+  const { authority, now } = context;
+  return !(
+    command.tenantId !== scope.tenantId ||
+    command.caseId !== scope.caseId ||
+    authority.tenantId !== scope.tenantId ||
+    authority.caseId !== scope.caseId ||
+    !authority.actorId.trim() ||
+    !authority.grantId.trim() ||
+    !authority.permissions.includes(permissions[command.kind]) ||
+    !beforeExpiry(authority.validUntil, now)
+  );
+}
+
 /**
  * A deterministic transition only. expectedRevision is a preflight, not a substitute
  * for Postgres CAS. Command-ID deduplication and payload conflict checks belong to the
@@ -452,16 +471,7 @@ export function decideCase(
     intents: [],
   });
   const { authority, now } = context;
-  if (
-    command.tenantId !== current.scope.tenantId ||
-    command.caseId !== current.scope.caseId ||
-    authority.tenantId !== current.scope.tenantId ||
-    authority.caseId !== current.scope.caseId ||
-    !authority.actorId.trim() ||
-    !authority.grantId.trim() ||
-    !authority.permissions.includes(permissions[command.kind]) ||
-    !beforeExpiry(authority.validUntil, now)
-  ) {
+  if (!hasCaseCommandAuthority(current.scope, command, context)) {
     return stop("authority_or_scope_mismatch");
   }
   if (command.expectedRevision !== current.revision) {

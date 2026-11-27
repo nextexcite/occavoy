@@ -19,6 +19,8 @@ Evidence frozen at merge commit `6112523`: [passing CI](https://github.com/nexte
 
 Use actual test output and the issue record for the latest verification result. Do not change an issue to Done merely because an interface or fixture exists.
 
+**Since that baseline:** the [first local OCA-34 trace](local-case-trace.md) connects HTTP activation to Postgres, a bounded scripted job, a synthetic hotel quote, exact approval, reconciliation and closure. It records which steps cross HTTP and which are fixture calls. The deployed route, operator screens, Pi integration on this path and cloud proof remain open.
+
 ## First integrated scenario
 
 Use one synthetic Hong Kong customer, a London performance, a two-person brief, and one hotel supplier response. All money and provider records are fixtures. A second destination must use the same path without changing the state machine.
@@ -40,7 +42,7 @@ The sequence requires an operator form and a case timeline, not a map, voice UI,
 
 ## Work order and file boundaries
 
-The durable foundation rows below are locally proven; the remaining work reuses them rather than adding parallel structures. The labels do not mark any Linear issue accepted. Case creation and activation are separate store APIs today — an atomic create-plus-activation HTTP route is a target, not an existing path.
+The remaining work reuses the durable foundation rather than adding parallel structures. The labels do not mark any Linear issue accepted. `createAndActivateCase` now composes case creation and the initial command, result, events and outbox in one Postgres transaction. The local intake handler uses it; the default web host does not mount it.
 
 | Order | Linear work                          | Reuse                                                                                                         | Concrete remaining gates                                                                                                                                                                                                                                                                                                                                                          |
 | ----- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -59,13 +61,13 @@ The week-2 milestone covers the **narrow integrated scenario**, including a mini
 
 These are application-level API targets, not claims that these routes already exist. Keep transport code thin and enforce the same rules in the domain/repository boundary.
 
-| Entry point                             | Input and trusted context                                                   | Durable result                                                                                                              |
-| --------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/cases`                       | Authenticated principal; explicit activation; brief and client command ID   | Case, command receipt and outbox in one transaction (target: atomic create+activation; today they are separate store calls) |
-| `POST /api/cases/:id/commands`          | Principal and tenant from auth; command ID; expected version; typed payload | Accepted or rejected receipt; an identical retry returns the earlier receipt                                                |
-| `GET /api/cases/:id`                    | Authorized case access                                                      | Current version, phase, waiting reason and public decision state                                                            |
-| `GET /api/cases/:id/timeline?after=...` | Authorized case access and cursor                                           | Persisted ordered events; streaming may deliver additional notifications                                                    |
-| `POST /api/supplier-responses`          | Authenticated/signed partner identity; RFQ/version; stable response ID      | Validated observation, deduplication and a case wake command                                                                |
+| Entry point                             | Input and trusted context                                                   | Durable result                                                                                                             |
+| --------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/cases`                       | Authenticated principal; explicit activation; brief and client command ID   | Atomic case, command result and outbox; exercised over loopback HTTP with a fixture grant, not mounted on the default host |
+| `POST /api/cases/:id/commands`          | Principal and tenant from auth; command ID; expected version; typed payload | Accepted or rejected receipt; an identical retry returns the earlier receipt                                               |
+| `GET /api/cases/:id`                    | Authorized case access                                                      | Current version, phase, waiting reason and public decision state                                                           |
+| `GET /api/cases/:id/timeline?after=...` | Authorized case access and cursor                                           | Persisted ordered events; streaming may deliver additional notifications                                                   |
+| `POST /api/supplier-responses`          | Authenticated/signed partner identity; RFQ/version; stable response ID      | Validated observation, deduplication and a case wake command                                                               |
 
 Approval is a typed command through the same boundary, not a free-text chat acknowledgement. Derive the approving actor and permitted scope from verified identity/grants. An approval must bind the immutable proposal version/hash, exact authorized amount and currency, action scope, and expiry.
 

@@ -1,10 +1,13 @@
 export { applyMigrations } from "./migrations";
 export * from "./object-store";
 export {
+  type ActivateInput,
+  CaseActivationError,
   type CaseCommandRow,
   type CaseDomainEventRow,
   type CaseOutboxRow,
   CommandConflictError,
+  type CreateCaseInput,
   canonicalJson,
   DEFAULT_OUTBOX_LEASE_MS,
   hashCommandPayload,

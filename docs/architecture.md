@@ -65,7 +65,7 @@ The checked-in case phases are `draft`, `clarifying`, `sourcing`, `proposal_read
 
 ## Command and effect path
 
-1. The HTTP boundary must authenticate the caller and derive tenant, actor and current grant. That boundary is not implemented. The reducer enforces the supplied scope and permission context on command decisions.
+1. The HTTP boundary must authenticate the caller and derive tenant, actor and current grant. The [local intake trace](local-case-trace.md) uses a scoped fixture grant and explicitly activates a new case in one transaction; no production identity resolver or public route is registered. The reducer enforces the supplied scope and permission context on command decisions.
 2. `receiveCommand` persists a received command and its payload hash, not an outbox item. `completeReceivedCommand` can resume it by tenant and command ID with trusted authority; `submitCommand` combines receipt and completion. Only then acknowledge acceptance.
 3. Completion locks the case, checks the expected revision, and commits the decision and any business changes, events and intents together. An identical retry reuses its receipt; payload conflicts are rejected.
 4. The case coordinator drains persisted intents through leased outbox rows; it is a delivery mechanism, not a second commercial ledger.
