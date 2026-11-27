@@ -52,8 +52,11 @@ The first is a synthetic business-state scenario. The second exercises the actua
 integration with a scripted model provider and no paid inference. Neither command establishes a
 deployed commercial service.
 
-For the [local HTTP-to-supplier case trace](docs/local-case-trace.md), use disposable Postgres.
-It shows one lost supplier reply reconciled without a second order; identity, model work and supply are fixtures.
+To see what durability changes for a customer, run `mise exec -- pnpm demo:london` with the
+disposable Compose Postgres on port 54329. The [saved-case walkthrough](docs/london-saved-case.md)
+lets you reopen the original request, approve one synthetic event-access offer and watch a lost
+supplier reply get resolved without rebooking. `pnpm verify:london` runs it unattended.
+The [earlier HTTP-to-supplier and RFQ-only traces](docs/local-case-trace.md) remain separate checks.
 
 ```sh
 mise run check

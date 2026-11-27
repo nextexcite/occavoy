@@ -58,6 +58,12 @@ export interface ServiceCaseRecoverySnapshot {
 
 type RunnableJobAdapter = Pick<CaseJobAdapter, "run">;
 
+const coordinatorIntentKinds: readonly string[] = [
+  "run_agent_task",
+  "cancel_agent_task",
+  "request_supplier_quote",
+];
+
 export interface ServiceCaseCoordinatorDeps {
   store: PostgresCaseStore;
   usageLedger: PostgresUsageLedger;
@@ -244,6 +250,8 @@ export class ServiceCaseCoordinator {
     const leaseMs = this.outboxLeaseMs();
     let next: Date | null = null;
     for (const row of rows) {
+      // Commercial effect intents are owned by their fresh deterministic dispatcher.
+      if (!coordinatorIntentKinds.includes(row.intentKind)) continue;
       let candidate: Date | null = null;
       if (row.status === "pending") candidate = row.availableAt;
       if (row.status === "dispatched" && row.dispatchedAt) {
@@ -275,6 +283,7 @@ export class ServiceCaseCoordinator {
         caseId,
         now: this.now(),
         leaseTimeoutMs: staleMs,
+        intentKinds: coordinatorIntentKinds,
       });
       if (rows.length === 0) break;
       summary.claimed += rows.length;

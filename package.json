@@ -23,7 +23,9 @@
     "verify:case-recovery": "pnpm --filter @occavoy/runtime verify:case-recovery",
     "demo:lifecycle": "node --import tsx scripts/demo-case-lifecycle.ts",
     "deploy:web": "pnpm --filter @occavoy/web deploy",
-    "experiment:new": "uv run python scripts/new_experiment.py"
+    "experiment:new": "uv run python scripts/new_experiment.py",
+    "verify:london": "pnpm --filter @occavoy/runtime verify:london",
+    "demo:london": "pnpm --filter @occavoy/runtime demo:london"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.9",

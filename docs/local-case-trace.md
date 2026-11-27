@@ -1,5 +1,7 @@
 # OCA-34: one local case, one supplier submission
 
+For the presenter-led **event-access** journey, see [Return to a saved London request](london-saved-case.md). It continues from the recovered Pi job's RFQ, not the hotel quote in the historical trace below.
+
 At code commit `4063434`, a loopback HTTP client activated a London fixture, a scoped approver accepted its one-component hotel proposal, and a synthetic supplier accepted the order but lost its reply. Postgres kept the case waiting for reconciliation. A lookup under the original reference confirmed the booking: **one submission, one synthetic order**. No customer, payment processor, model provider, or live supplier participated.
 
 ## Reproduce
