@@ -118,7 +118,10 @@ export class DeterministicEffectDispatcher {
     input: ActionContext & Pick<Reconciliation, "result" | "providerReference" | "evidenceRef">,
   ) {
     const action = await this.readAction(input);
-    if (action.status !== "unknown") throw new Error("operator_reconciliation_requires_unknown");
+    // After a process loss the timeout itself may not have been recorded. Positive
+    // evidence can settle that action, but an in-flight send must not be unlocked.
+    if (action.status === "dispatching" && input.result !== "confirmed")
+      throw new Error("dispatch_still_in_flight");
     return this.record(input, action, {
       kind: "reconcile_handoff",
       source: "operator_verified",
