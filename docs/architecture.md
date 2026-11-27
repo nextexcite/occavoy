@@ -4,6 +4,8 @@ Status: selected boundaries with implementation and cloud proof tracked separate
 
 ## Runtime topology
 
+The topology below is the target deployment shape. In the current tree the coordinator, store, usage ledger, effect dispatcher and quota ledger exist and are locally tested; the authenticated web request path, the host Pi invoker and every provider edge are not wired.
+
 | Component           | Responsibility                                                                                     | Initial deployment direction                                         |
 | ------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `apps/web`          | TanStack Start interface, authenticated request boundary, progress and operator views              | Cloudflare Workers Paid                                              |
@@ -25,7 +27,7 @@ flowchart TD
     R --> S["Manual and API supply adapters"]
     R --> J["Scoped agent-job actor"]
     J --> T["Pi Durable and allowed domain tools"]
-    J --> P
+    J -->|candidate only| R
     W --> B["Reserved R2 storage"]
     R --> B
 ```
@@ -46,7 +48,7 @@ These are module responsibilities. Do not create seven deployable services to ma
 
 ## Record ownership
 
-Postgres is the intended business authority. Case actors hold recoverable receipt/drain state and execution references; Pi actors hold scoped conversations, submissions and model/tool checkpoints in actor SQLite. R2 stores selected evidence bytes referenced by records. A development memory adapter or fixture is not a production persistence claim.
+Postgres is the intended business authority. Case actors hold only a recoverable drain schedule receipt and execution references; Pi actors hold scoped conversations, submissions and model/tool checkpoints in actor SQLite. R2 stores selected evidence bytes referenced by records. A development memory adapter or fixture is not a production persistence claim.
 
 | Records                                  | Required invariant                                                                        |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -59,16 +61,16 @@ Postgres is the intended business authority. Case actors hold recoverable receip
 | Command, outbox, result                  | Acknowledged commands survive process failure and can be delivered again safely           |
 | Usage and storage reservation            | Reserve atomically, settle once, and reconcile uncertain outcomes                         |
 
-Use a stable case phase such as `draft`, `qualifying`, `sourcing`, `proposing`, `fulfilling`, or `closed`. Track blocking reasons separately. Order, payment, fulfillment, and refund state remain independent: none implies the others.
+The checked-in case phases are `draft`, `clarifying`, `sourcing`, `proposal_ready`, `awaiting_approval`, `fulfilling`, and `closed`. `reconciliation` and `agent_intervention` are waiting reasons, not phases. Track blocking reasons separately. Order, payment, fulfillment, and refund state remain independent: none implies the others.
 
 ## Command and effect path
 
-1. Authenticate at the server boundary and derive tenant scope from the authenticated context.
-2. Commit the command, its inputs, expected version, and outbox entry together. Only then acknowledge acceptance.
-3. Deliver at least once. The runtime records reception using the command ID, and ensures a received but incomplete command can resume.
-4. Read the current commercial version before changing state. Commit the business result and completion marker in one business transaction.
-5. Before an external state change, persist a stable action ID, request hash, provider reference, and approved terms. Recheck cancellation, approval, and quote validity at the dispatch boundary.
-6. After a lost response, query by the stable reference or hand over to an operator. A local retry marker cannot prove that a provider did not act.
+1. The HTTP boundary must authenticate the caller and derive tenant, actor and current grant. That boundary is not implemented. The reducer enforces the supplied scope and permission context on command decisions.
+2. `receiveCommand` persists a received command and its payload hash, not an outbox item. `completeReceivedCommand` can resume it by tenant and command ID with trusted authority; `submitCommand` combines receipt and completion. Only then acknowledge acceptance.
+3. Completion locks the case, checks the expected revision, and commits the decision and any business changes, events and intents together. An identical retry reuses its receipt; payload conflicts are rejected.
+4. The case coordinator drains persisted intents through leased outbox rows; it is a delivery mechanism, not a second commercial ledger.
+5. Before an external state change, persist a stable action ID, request hash and approved terms. The stable client reference exists before contacting the supplier; the actual provider reference is recorded only after provider evidence. Recheck cancellation, approval, and quote validity at the dispatch boundary.
+6. Only a fresh dispatch transaction may send to a provider; replaying a persisted intent is not permission to send. After a lost response, query by the stable reference or hand over to an operator. A negative or missing lookup without attempt-bound proof cannot authorize a retry, and a local retry marker cannot prove that a provider did not act.
 
 Postgres and Rivet do not share a transaction. Replayed steps must recognize committed business results. A case waiting for a supplier must still accept cancellation, changed input, or expiry commands. Use short, bounded processing steps and persistent waiting state rather than one blocking call.
 
@@ -94,7 +96,7 @@ Use no general-purpose code sandbox for work that a bounded HTTP or deterministi
 
 ## Deployment qualification
 
-Pin tools in `mise.toml`, package manifests, and lockfiles. Rivet `3.1.1` is the current stable qualification candidate; verify its exact workflow API rather than copying incompatible rolling-documentation examples. The cloud proof must show start, wait, process replacement, wake, and the correct business result on the chosen deployed combination.
+Customer-visible authentication, tenant projections and the request path above are targets measured against local fixtures; no production host is currently configured. Pin tools in `mise.toml`, package manifests, and lockfiles. Rivet `3.1.1` is the current stable qualification candidate; verify its exact workflow API rather than copying incompatible rolling-documentation examples. The cloud proof must show start, wait, process replacement, wake, and the correct business result on the chosen deployed combination.
 
 An operational release additionally needs authentication, tenant isolation, backup and restore evidence, secret injection, observability, and a controlled reconciliation path. A health endpoint alone does not establish these properties.
 

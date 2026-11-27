@@ -30,10 +30,15 @@ Keep domain logic independent from cloud bindings. Use small adapters for storag
 ## Checks
 
 ```sh
-pnpm check
-pnpm check:python
+docker compose up --detach --wait postgres
+DATABASE_URL=postgresql://127.0.0.1:54329/occavoy PGUSER=occavoy PGPASSWORD=occavoy mise exec -- pnpm check
+mise exec -- pnpm check:python
+mise exec -- pnpm verify:runtime
+mise exec -- pnpm verify:harness
 uv run --package occavoy-evals pytest experiments/evals/tests
 ```
+
+The Compose Postgres service is a local disposable fixture. The `occavoy`/`occavoy` credentials are public local-only fixture values — never point these commands at a production or shared database. Plain `pnpm check` without `DATABASE_URL` skips the database-backed suites. The product checkout has no env-file loader; pass the variables in the shell as above.
 
 `pnpm check` is the TypeScript workspace integration check. `pnpm check:python` adds Python lint, formatting, and the evaluation tests; the final command above runs just the evaluation tests. Run the relevant package checks during development and the root check before integration. Run Python checks when experiments or their contracts change. Formatting and relative-link checks are sufficient for ordinary documentation-only edits.
 

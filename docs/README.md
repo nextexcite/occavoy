@@ -2,6 +2,8 @@
 
 The current product baseline is **v0.2**: Hong Kong customers, global destinations, a partner-facing demonstration within one month, an assisted usable product within one to two months, and a bounded commercial experiment within twelve weeks.
 
+The [implementation handoff](implementation-handoff.md#starting-evidence) records what is actually proven locally versus what remains an open gate; treat it as the evidence index before reading any target description below.
+
 | Document                                                            | Use it to answer                                                          |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | [Product requirements](product/prd-v0.2.md)                         | What must the first usable service do?                                    |

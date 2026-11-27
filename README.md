@@ -32,11 +32,13 @@ export OCCAVOY_RUNTIME_DEMO_TOKEN="$(openssl rand -hex 32)"
 mise run runtime
 ```
 
-The runtime is a separate Rivet development probe. Its start command and verification procedure
-are documented in [apps/runtime/README.md](apps/runtime/README.md). The web preview does not yet
-send real service requests to it. Local development requires no production credentials.
+The runtime contains the Postgres-backed case coordinator and two isolated qualification actors.
+The web screens preview local data; they do not submit a case. The runtime start command and verification
+procedure are documented in [apps/runtime/README.md](apps/runtime/README.md). Local development
+requires no production credentials.
 
-The next implementation slice is specified in the [engineering handoff](docs/implementation-handoff.md).
+The [engineering handoff](docs/implementation-handoff.md) is the single current implementation
+matrix: what exists, what is proven locally, and what remains unwired.
 The [execution diagrams](docs/agent-execution.md) distinguish a customer relationship, a service
 case, a bounded agent job, and an external action. Run the domain scenario and real harness
 qualification separately:
@@ -61,16 +63,16 @@ after adding its dependencies. See [experiments](experiments/README.md).
 
 ## Workspace
 
-| Path                | Responsibility                                                  |
-| ------------------- | --------------------------------------------------------------- |
-| `apps/web`          | TanStack Start frontend and Cloudflare Workers request boundary |
-| `apps/runtime`      | Rivet Cloud-compatible actor runtime and local durability probe |
-| `packages/domain`   | Global destination, money, event, brief and approval contracts  |
-| `packages/storage`  | 8 GB object admission policy and persistent-ledger contract     |
-| `experiments/*`     | Isolated Python scenarios in one locked `uv` workspace          |
-| `docs/product`      | Current PRD and scope                                           |
-| `docs/adr`          | Architecture decisions and their consequences                   |
-| `.github/workflows` | Reproducible CI without cloud deployment or model spending      |
+| Path                | Responsibility                                                         |
+| ------------------- | ---------------------------------------------------------------------- |
+| `apps/web`          | TanStack Start frontend and Cloudflare Workers request boundary        |
+| `apps/runtime`      | Service-case coordinator, bounded job adapter and qualification actors |
+| `packages/domain`   | Global destination, money, event, brief and approval contracts         |
+| `packages/storage`  | Postgres case/command/outbox store, usage and quota ledgers            |
+| `experiments/*`     | Isolated Python scenarios in one locked `uv` workspace                 |
+| `docs/product`      | Current PRD and scope                                                  |
+| `docs/adr`          | Architecture decisions and their consequences                          |
+| `.github/workflows` | Reproducible CI without cloud deployment or model spending             |
 
 ## Technical baseline
 
@@ -79,11 +81,11 @@ after adding its dependencies. See [experiments](experiments/README.md).
   scoped agent jobs have distinct responsibilities within the same runtime.
 - **Agent harness:** qualify `@rivet-dev/pi@0.5.7` with the compatible Pi Durable `1.5.2`
   family. See the [harness decision](docs/adr/0005-agent-harness.md) before changing these pins.
-- **Business records:** Postgres is the intended authority for quotes, approvals, orders and costs.
-  Database integration is an upcoming PoC task; the runtime probe is not the commercial ledger.
+- **Business records:** Postgres records commands, decisions, immutable commercial versions and
+  emitted outbox intents. Live identity/grant resolution and the end-to-end request path are not wired.
 - **Objects:** R2 with an application budget of **8,000,000,000 bytes**, shared across Occavoy's
-  managed environments. Uploads are disabled until durable quota accounting and reconciliation
-  are integrated. An R2 binding is not a native 8 GB account quota.
+  managed environments. The Postgres quota ledger exists; live inventory reconciliation and
+  uploads remain disabled. An R2 binding is not a native 8 GB account quota.
 - **Additional execution:** Restate self-hosted is reserved for a separately justified workflow.
   Sandbox providers remain optional; see the [sandbox decision](docs/adr/0004-storage-and-sandbox-boundaries.md).
 - **Toolchain:** `mise.toml`, exact package versions, `pnpm-lock.yaml` and `uv.lock` are the
