@@ -314,27 +314,37 @@ export class ServiceCaseCoordinator {
       maxModelCalls: task.maxModelCalls,
       maxToolCalls: task.maxToolCalls,
     };
-    const allowance = this.deps.allowanceForTask?.(task) ?? {
-      maxModelCalls: task.maxModelCalls,
-      maxToolCalls: task.maxToolCalls,
-      maxCostMinor: null,
-      currency: null,
-    };
-    const existingAllowance = await this.deps.usageLedger.getAllowance(row.tenantId, row.caseId);
-    if (!existingAllowance) {
-      await this.deps.usageLedger.initializeAllowance({
-        tenantId: row.tenantId,
-        caseId: row.caseId,
-        ...allowance,
-      });
-    }
-
     const key = keyOf(row.tenantId, row.caseId, task.taskId);
     const existing = this.jobs.get(key);
     if (existing) return;
     const controller = new AbortController();
     this.jobs.set(key, { controller, spec });
     try {
+      const allowance = this.deps.allowanceForTask?.(task) ?? {
+        maxModelCalls: task.maxModelCalls,
+        maxToolCalls: task.maxToolCalls,
+        maxCostMinor: null,
+        currency: null,
+      };
+      const existingAllowance = await this.deps.usageLedger.getAllowance(row.tenantId, row.caseId);
+      if (!existingAllowance) {
+        await this.deps.usageLedger.initializeAllowance({
+          tenantId: row.tenantId,
+          caseId: row.caseId,
+          ...allowance,
+        });
+      }
+      const current = await this.deps.store.getCase(row.tenantId, row.caseId);
+      const stillActive = current?.activeTask;
+      if (
+        controller.signal.aborted ||
+        !stillActive ||
+        stillActive.taskId !== task.taskId ||
+        stillActive.caseRevision !== task.caseRevision ||
+        stillActive.briefVersion !== task.briefVersion
+      ) {
+        return;
+      }
       const adapter = this.deps.createJobAdapter(spec);
       await adapter.run(spec, { signal: controller.signal });
     } finally {

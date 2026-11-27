@@ -43,7 +43,7 @@ export interface CaseJobRunner {
 
 export type CaseJobCompletion =
   | { status: "submitted"; deduplicated: boolean; decision: CaseDecision }
-  | { status: "aborted"; reason: "cancelled" }
+  | { status: "aborted"; reason: "cancelled" | "deadline_exceeded" }
   | { status: "budget_exhausted"; reason: "budget_exhausted" };
 
 export class JobAbortedError extends Error {
@@ -57,6 +57,13 @@ export class BudgetExhaustedError extends Error {
   constructor() {
     super("Case usage budget exhausted");
     this.name = "BudgetExhaustedError";
+  }
+}
+
+export class JobDeadlineExceededError extends Error {
+  constructor() {
+    super("Agent job deadline exceeded");
+    this.name = "JobDeadlineExceededError";
   }
 }
 
@@ -204,10 +211,24 @@ export class CaseJobAdapter {
   }
 
   async run(spec: AgentJobSpec, options?: { signal?: AbortSignal }): Promise<CaseJobCompletion> {
-    const signal = options?.signal ?? new AbortController().signal;
+    const callerSignal = options?.signal ?? new AbortController().signal;
+    const deadlineAt = Date.parse(spec.deadlineAt);
+    if (!Number.isFinite(deadlineAt)) throw new CandidateValidationError("Job deadline is invalid");
+    const nowMs = () => this.deps.now?.().getTime() ?? Date.now();
+    if (nowMs() >= deadlineAt) return { status: "aborted", reason: "deadline_exceeded" };
+    const controller = new AbortController();
+    const abortFromCaller = () => controller.abort();
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener("abort", abortFromCaller, { once: true });
+    const deadlineTimer = setTimeout(() => controller.abort(), Math.max(1, deadlineAt - nowMs()));
+    const signal = controller.signal;
     const costCategory = this.deps.costCategory ?? "dev_subscription";
+    const throwIfDeadlineExceeded = () => {
+      if (nowMs() >= deadlineAt) throw new JobDeadlineExceededError();
+    };
     const reserve = async (kind: "model_call" | "tool_call", charge?: UsageCharge) => {
       throwIfAborted(signal);
+      throwIfDeadlineExceeded();
       const reservation = await this.deps.usageLedger.reserveUsage({
         tenantId: spec.tenantId,
         relationshipId: await this.deps.relationshipIdForJob(spec),
@@ -234,9 +255,11 @@ export class CaseJobAdapter {
         reserveToolCall: (charge) => reserve("tool_call", charge),
       });
       throwIfAborted(signal);
+      throwIfDeadlineExceeded();
       const candidate = validateAgentTaskCandidate(raw);
       validateCandidateFence(candidate, spec);
       throwIfAborted(signal);
+      throwIfDeadlineExceeded();
       const submitted = await this.deps.store.submitCommand(
         {
           kind: "agent_candidate",
@@ -257,6 +280,9 @@ export class CaseJobAdapter {
         decision: submitted.decision,
       };
     } catch (error) {
+      if (error instanceof JobDeadlineExceededError || nowMs() >= deadlineAt) {
+        return { status: "aborted", reason: "deadline_exceeded" };
+      }
       if (error instanceof JobAbortedError || signal.aborted) {
         return { status: "aborted", reason: "cancelled" };
       }
@@ -264,6 +290,9 @@ export class CaseJobAdapter {
         return { status: "budget_exhausted", reason: "budget_exhausted" };
       }
       throw error;
+    } finally {
+      clearTimeout(deadlineTimer);
+      callerSignal.removeEventListener("abort", abortFromCaller);
     }
   }
 }

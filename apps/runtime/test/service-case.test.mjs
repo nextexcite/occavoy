@@ -126,6 +126,37 @@ async function activateAndDrain(coordinator, snapshot, taskId) {
   return result;
 }
 
+test("job adapter does not start an expired job or admit paid work", async () => {
+  let invocations = 0;
+  const spec = {
+    tenantId: "tenant-deadline",
+    caseId: "case-deadline",
+    taskId: "task-deadline",
+    requestId: "task-deadline",
+    baseRevision: 1,
+    briefVersion: 1,
+    purpose: "derive_requirements",
+    toolProfile: "case_readonly_v1",
+    deadlineAt: "2020-01-01T00:00:00Z",
+    maxModelCalls: 1,
+    maxToolCalls: 0,
+  };
+  const adapter = new PiJobAdapter(
+    {
+      store: null,
+      usageLedger: null,
+      relationshipIdForJob: async () => "relationship-deadline",
+      authorityForJob: () => authority(spec.tenantId, spec.caseId, "agent_candidate"),
+    },
+    async () => {
+      invocations += 1;
+      return null;
+    },
+  );
+  assert.deepEqual(await adapter.run(spec), { status: "aborted", reason: "deadline_exceeded" });
+  assert.equal(invocations, 0);
+});
+
 dbTest(
   "service case waits for supplier without model work and recovers without duplicates",
   async (t) => {
