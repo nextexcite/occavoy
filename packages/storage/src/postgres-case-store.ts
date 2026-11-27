@@ -7,6 +7,7 @@ import {
   type CustomerRelationship,
   createServiceCase,
   decideCase,
+  hasCaseCommandAuthority,
 } from "@occavoy/domain/case-lifecycle";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
@@ -35,6 +36,15 @@ export function hashCommandPayload(command: CaseCommand): string {
   return createHash("sha256").update(canonicalJson(semantic)).digest("hex");
 }
 
+function isServiceCasesPkConflict(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: string }).code === "23505" &&
+    (error as { constraint?: string }).constraint === "service_cases_pkey"
+  );
+}
+
 /** Default lease for a claimed outbox intent before it can be reclaimed. */
 export const DEFAULT_OUTBOX_LEASE_MS = 60_000;
 
@@ -45,6 +55,19 @@ export class CommandConflictError extends Error {
     this.name = "CommandConflictError";
   }
 }
+
+export class CaseActivationError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+    this.name = "CaseActivationError";
+  }
+}
+
+export type CreateCaseInput = Parameters<typeof createServiceCase>[0] & {
+  channelId?: string;
+  payerId?: string;
+};
+export type ActivateInput = Extract<CaseCommand, { kind: "activate" }>;
 
 export interface CaseCommandRow {
   tenantId: string;
@@ -197,77 +220,12 @@ export class PostgresCaseStore {
   }
 
   /** Creates the relationship if absent, then the case and its `case_created` event in one tx. */
-  async createCase(
-    input: Parameters<typeof createServiceCase>[0] & {
-      channelId?: string;
-      payerId?: string;
-    },
-  ): Promise<CaseSnapshot> {
+  async createCase(input: CreateCaseInput): Promise<CaseSnapshot> {
     const snapshot = createServiceCase(input);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query(
-        `INSERT INTO customer_relationships
-           (tenant_id, id, customer_id, channel_id, preference_reuse_allowed)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (tenant_id, id) DO NOTHING`,
-        [
-          input.relationship.tenantId,
-          input.relationship.id,
-          input.relationship.customerId,
-          input.channelId ?? null,
-          input.relationship.preferenceReuseAllowed,
-        ],
-      );
-      const relationship = await client.query(
-        `SELECT customer_id FROM customer_relationships
-         WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
-        [input.relationship.tenantId, input.relationship.id],
-      );
-      if (relationship.rows[0].customer_id !== input.relationship.customerId) {
-        throw new Error("Relationship already exists for a different customer");
-      }
-      await client.query(
-        `INSERT INTO service_cases
-           (tenant_id, id, relationship_id, customer_id, channel_id, payer_id,
-            revision, phase, wait_reason, deadline, brief_id, brief_version,
-            outcome, cancel_requested, snapshot)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-        [
-          snapshot.scope.tenantId,
-          snapshot.scope.caseId,
-          snapshot.scope.relationshipId,
-          snapshot.scope.customerId,
-          input.channelId ?? null,
-          input.payerId ?? snapshot.brief.approverActorId,
-          snapshot.revision,
-          snapshot.phase,
-          snapshot.waitReason,
-          snapshot.deadline,
-          snapshot.brief.id,
-          snapshot.brief.version,
-          snapshot.outcome,
-          snapshot.cancelRequested,
-          JSON.stringify(snapshot),
-        ],
-      );
-      await client.query(
-        `INSERT INTO case_domain_events
-           (tenant_id, case_id, command_id, case_revision, event_kind, payload)
-         VALUES ($1, $2, NULL, $3, 'case_created', $4)`,
-        [
-          snapshot.scope.tenantId,
-          snapshot.scope.caseId,
-          snapshot.revision,
-          JSON.stringify({
-            relationshipId: snapshot.scope.relationshipId,
-            customerId: snapshot.scope.customerId,
-            briefId: snapshot.brief.id,
-            eventId: snapshot.sourceEvent.id,
-          }),
-        ],
-      );
+      await this.insertCaseOn(client, input, snapshot);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -276,6 +234,128 @@ export class PostgresCaseStore {
       client.release();
     }
     return snapshot;
+  }
+
+  private async insertCaseOn(
+    client: PoolClient,
+    input: CreateCaseInput,
+    snapshot: CaseSnapshot,
+  ): Promise<void> {
+    await client.query(
+      `INSERT INTO customer_relationships
+         (tenant_id, id, customer_id, channel_id, preference_reuse_allowed)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (tenant_id, id) DO NOTHING`,
+      [
+        input.relationship.tenantId,
+        input.relationship.id,
+        input.relationship.customerId,
+        input.channelId ?? null,
+        input.relationship.preferenceReuseAllowed,
+      ],
+    );
+    const relationship = await client.query(
+      `SELECT customer_id FROM customer_relationships
+       WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
+      [input.relationship.tenantId, input.relationship.id],
+    );
+    if (relationship.rows[0].customer_id !== input.relationship.customerId) {
+      throw new Error("Relationship already exists for a different customer");
+    }
+    await client.query(
+      `INSERT INTO service_cases
+         (tenant_id, id, relationship_id, customer_id, channel_id, payer_id,
+          revision, phase, wait_reason, deadline, brief_id, brief_version,
+          outcome, cancel_requested, snapshot)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [
+        snapshot.scope.tenantId,
+        snapshot.scope.caseId,
+        snapshot.scope.relationshipId,
+        snapshot.scope.customerId,
+        input.channelId ?? null,
+        input.payerId ?? snapshot.brief.approverActorId,
+        snapshot.revision,
+        snapshot.phase,
+        snapshot.waitReason,
+        snapshot.deadline,
+        snapshot.brief.id,
+        snapshot.brief.version,
+        snapshot.outcome,
+        snapshot.cancelRequested,
+        JSON.stringify(snapshot),
+      ],
+    );
+    await client.query(
+      `INSERT INTO case_domain_events
+         (tenant_id, case_id, command_id, case_revision, event_kind, payload)
+       VALUES ($1, $2, NULL, $3, 'case_created', $4)`,
+      [
+        snapshot.scope.tenantId,
+        snapshot.scope.caseId,
+        snapshot.revision,
+        JSON.stringify({
+          relationshipId: snapshot.scope.relationshipId,
+          customerId: snapshot.scope.customerId,
+          briefId: snapshot.brief.id,
+          eventId: snapshot.sourceEvent.id,
+        }),
+      ],
+    );
+  }
+
+  /**
+   * Atomic create + activate: the case rows and the activation command receipt,
+   * decision, events and intents commit in one transaction. An identical retry
+   * returns the original result without reinserting the case; a changed payload
+   * under the same command ID conflicts through the composite hash.
+   */
+  async createAndActivateCase(
+    input: CreateCaseInput,
+    command: ActivateInput,
+    context: { now: Date; authority: CaseAuthority },
+  ): Promise<StoredCommandResult> {
+    const snapshot = createServiceCase(input);
+    if (!hasCaseCommandAuthority(snapshot.scope, command, context)) {
+      throw new CaseActivationError("authority_or_scope_mismatch");
+    }
+    const hash = createHash("sha256")
+      .update(
+        canonicalJson({
+          operation: "create_and_activate_v1",
+          input,
+          command,
+          actorId: context.authority.actorId,
+          grantId: context.authority.grantId,
+        }),
+      )
+      .digest("hex");
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const fresh = await this.insertReceiptOn(client, command, context.authority, hash);
+      if (fresh) await this.insertCaseOn(client, input, snapshot);
+      const result = await this.completeLocked(
+        client,
+        command.tenantId,
+        command.commandId,
+        context,
+        hash,
+      );
+      if (result.decision.outcome !== "applied") {
+        throw new CaseActivationError(result.decision.reason);
+      }
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (isServiceCasesPkConflict(error)) {
+        throw new CaseActivationError("case_already_exists");
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getCase(tenantId: string, caseId: string): Promise<CaseSnapshot | null> {
@@ -384,24 +464,7 @@ export class PostgresCaseStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query(
-        `INSERT INTO case_commands
-           (tenant_id, command_id, case_id, command_kind, expected_revision,
-            payload_hash, command_json, actor_id, grant_id, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'received')
-         ON CONFLICT (tenant_id, command_id) DO NOTHING`,
-        [
-          command.tenantId,
-          command.commandId,
-          command.caseId,
-          command.kind,
-          command.expectedRevision,
-          payloadHash,
-          canonicalJson(command),
-          context.authority.actorId,
-          context.authority.grantId,
-        ],
-      );
+      await this.insertReceiptOn(client, command, context.authority, payloadHash);
       const result = await this.completeLocked(
         client,
         command.tenantId,
@@ -417,6 +480,33 @@ export class PostgresCaseStore {
     } finally {
       client.release();
     }
+  }
+
+  private async insertReceiptOn(
+    client: PoolClient,
+    command: CaseCommand,
+    authority: CaseAuthority,
+    payloadHash: string,
+  ): Promise<boolean> {
+    const result = await client.query(
+      `INSERT INTO case_commands
+         (tenant_id, command_id, case_id, command_kind, expected_revision,
+          payload_hash, command_json, actor_id, grant_id, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'received')
+       ON CONFLICT (tenant_id, command_id) DO NOTHING`,
+      [
+        command.tenantId,
+        command.commandId,
+        command.caseId,
+        command.kind,
+        command.expectedRevision,
+        payloadHash,
+        canonicalJson(command),
+        authority.actorId,
+        authority.grantId,
+      ],
+    );
+    return result.rowCount === 1;
   }
 
   /** Core of completeReceivedCommand/submitCommand. Caller owns the transaction. */

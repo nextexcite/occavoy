@@ -12,7 +12,9 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { applyMigrations } from "../src/migrations";
 import {
+  CaseActivationError,
   CommandConflictError,
+  type CreateCaseInput,
   PostgresCaseStore,
   type StoredCommandResult,
 } from "../src/postgres-case-store";
@@ -103,21 +105,19 @@ function makeHarness(store: PostgresCaseStore, tenantId: string, caseId: string)
   return harness;
 }
 
-async function createCase(
-  store: PostgresCaseStore,
+function caseInput(
   tenantId: string,
   caseId: string,
   event = demoEvents[1]!,
   currency = "GBP",
-) {
-  const relationship = {
-    id: `relationship-${tenantId}`,
-    tenantId,
-    customerId: `customer-${tenantId}`,
-    preferenceReuseAllowed: true,
-  };
-  const snapshot = await store.createCase({
-    relationship,
+): CreateCaseInput {
+  return {
+    relationship: {
+      id: `relationship-${tenantId}`,
+      tenantId,
+      customerId: `customer-${tenantId}`,
+      preferenceReuseAllowed: true,
+    },
     caseId,
     sourceEvent: event,
     brief: {
@@ -129,7 +129,17 @@ async function createCase(
       approverActorId: "payer-fixture",
     },
     deadline: "2027-01-10T12:00:00Z",
-  });
+  };
+}
+
+async function createCase(
+  store: PostgresCaseStore,
+  tenantId: string,
+  caseId: string,
+  event = demoEvents[1]!,
+  currency = "GBP",
+) {
+  const snapshot = await store.createCase(caseInput(tenantId, caseId, event, currency));
   const harness = makeHarness(store, tenantId, caseId);
   harness.state = snapshot;
   return { harness, snapshot };
@@ -407,6 +417,177 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
     expect(jobs.rows).toEqual(
       ids.map((case_id) => ({ case_id, task_id: "shared-task", request_id: "shared-task" })),
     );
+  });
+
+  function activationFixture(tenantId: string, caseId: string) {
+    const input = caseInput(tenantId, caseId);
+    const command = {
+      kind: "activate" as const,
+      commandId: `${caseId}-activate-1`,
+      tenantId,
+      caseId,
+      expectedRevision: 0,
+      taskId: `task-${caseId}`,
+      maxModelCalls: 2,
+      maxToolCalls: 3,
+    };
+    const authority: CaseAuthority = {
+      tenantId,
+      caseId,
+      actorId: "runtime-fixture",
+      grantId: "grant-runtime-fixture",
+      permissions: ["case.edit"],
+      validUntil: "2027-01-10T12:00:00Z",
+    };
+    return { input, command, context: { now: NOW, authority }, authority };
+  }
+
+  it("createAndActivateCase commits atomically and deduplicates concurrent identical retries", async () => {
+    const tenantId = tenant();
+    const caseId = "case-concurrent-create";
+    const { input, command, context } = activationFixture(tenantId, caseId);
+    const [first, second] = await Promise.all([
+      store.createAndActivateCase(input, command, context),
+      store.createAndActivateCase(input, command, context),
+    ]);
+    expect([first.deduplicated, second.deduplicated].sort()).toEqual([false, true]);
+    expect(first.outboxIds).toEqual(second.outboxIds);
+    expect(first.outboxIds).toHaveLength(1);
+    const original = first.deduplicated ? second : first;
+
+    const snapshot = await store.getCase(tenantId, caseId);
+    expect(snapshot?.revision).toBe(1);
+    expect(snapshot?.phase).toBe("clarifying");
+    expect(snapshot?.waitReason).toBe("agent_task");
+
+    const events = await pool.query(
+      "SELECT event_kind FROM case_domain_events WHERE tenant_id = $1 AND case_id = $2",
+      [tenantId, caseId],
+    );
+    expect(events.rows.map((row) => row.event_kind).sort()).toEqual([
+      "case_created",
+      "command.activate",
+      "intent.run_agent_task",
+    ]);
+    const outbox = await pool.query(
+      "SELECT intent_kind FROM case_outbox WHERE tenant_id = $1 AND case_id = $2",
+      [tenantId, caseId],
+    );
+    expect(outbox.rows).toEqual([{ intent_kind: "run_agent_task" }]);
+    const commands = await pool.query(
+      "SELECT command_id, status, outcome FROM case_commands WHERE tenant_id = $1",
+      [tenantId],
+    );
+    expect(commands.rows).toEqual([
+      { command_id: command.commandId, status: "completed", outcome: "applied" },
+    ]);
+
+    const replay = await new PostgresCaseStore(pool).createAndActivateCase(input, command, context);
+    expect(replay.deduplicated).toBe(true);
+    expect(replay.decision).toEqual(original.decision);
+    expect(replay.outboxIds).toEqual(original.outboxIds);
+  });
+
+  it("rejects changed create payloads, distinct activations of an existing case and ordinary ID reuse", async () => {
+    const tenantId = tenant();
+    const caseId = "case-create-conflicts";
+    const { input, command, context, authority } = activationFixture(tenantId, caseId);
+    const created = await store.createAndActivateCase(input, command, context);
+    expect(created.decision.outcome).toBe("applied");
+
+    const changedBudget = caseInput(tenantId, caseId);
+    changedBudget.brief = {
+      ...changedBudget.brief,
+      budget: { amountMinor: 200000, currency: "GBP" },
+    };
+    await expect(
+      store.createAndActivateCase(changedBudget, command, context),
+    ).rejects.toBeInstanceOf(CommandConflictError);
+    await expect(
+      store.createAndActivateCase(input, command, {
+        now: NOW,
+        authority: { ...authority, grantId: "grant-other" },
+      }),
+    ).rejects.toBeInstanceOf(CommandConflictError);
+
+    const distinct = { ...command, commandId: `${caseId}-activate-2` };
+    const existing = await store
+      .createAndActivateCase(input, distinct, context)
+      .catch((error: unknown) => error);
+    expect(existing).toBeInstanceOf(CaseActivationError);
+    expect((existing as CaseActivationError).reason).toBe("case_already_exists");
+    expect(await store.getCommand(tenantId, distinct.commandId)).toBeNull();
+
+    await expect(store.submitCommand(command, { now: NOW, authority })).rejects.toBeInstanceOf(
+      CommandConflictError,
+    );
+
+    const snapshot = await store.getCase(tenantId, caseId);
+    expect(snapshot?.revision).toBe(1);
+    const commands = await pool.query("SELECT command_id FROM case_commands WHERE tenant_id = $1", [
+      tenantId,
+    ]);
+    expect(commands.rows).toEqual([{ command_id: command.commandId }]);
+    const outbox = await pool.query(
+      "SELECT id::text AS id FROM case_outbox WHERE tenant_id = $1 AND case_id = $2",
+      [tenantId, caseId],
+    );
+    expect(outbox.rows).toHaveLength(1);
+  });
+
+  it("fails closed on expired or denied authority and rolls a rejected activation fully back", async () => {
+    const tenantId = tenant();
+    const caseId = "case-create-authority";
+    const { input, command, context, authority } = activationFixture(tenantId, caseId);
+    await store.createAndActivateCase(input, command, context);
+
+    for (const override of [
+      { validUntil: "2027-01-01T11:00:00Z" },
+      { permissions: ["case.close" as const] },
+      { actorId: "" },
+    ]) {
+      const denied = await store
+        .createAndActivateCase(input, command, {
+          now: NOW,
+          authority: { ...authority, ...override },
+        })
+        .catch((error: unknown) => error);
+      expect(denied).toBeInstanceOf(CaseActivationError);
+      expect((denied as CaseActivationError).reason).toBe("authority_or_scope_mismatch");
+    }
+
+    const rollbackTenant = tenant();
+    const rollbackCase = "case-create-rollback";
+    const fixture = activationFixture(rollbackTenant, rollbackCase);
+    fixture.input.deadline = "2027-01-05T12:00:00Z";
+    const rejected = await store
+      .createAndActivateCase(fixture.input, fixture.command, {
+        now: new Date("2027-01-06T12:00:00Z"),
+        authority: fixture.authority,
+      })
+      .catch((error: unknown) => error);
+    expect(rejected).toBeInstanceOf(CaseActivationError);
+    expect((rejected as CaseActivationError).reason).toBe("invalid_task_allowance");
+
+    const relationship = await pool.query(
+      "SELECT 1 FROM customer_relationships WHERE tenant_id = $1 AND id = $2",
+      [rollbackTenant, fixture.input.relationship.id],
+    );
+    expect(relationship.rowCount).toBe(0);
+    for (const table of ["service_cases", "case_commands", "case_domain_events", "case_outbox"]) {
+      const rows = await pool.query(`SELECT 1 FROM ${table} WHERE tenant_id = $1`, [
+        rollbackTenant,
+      ]);
+      expect(rows.rowCount).toBe(0);
+    }
+
+    const retried = await store.createAndActivateCase(fixture.input, fixture.command, {
+      now: NOW,
+      authority: fixture.authority,
+    });
+    expect(retried.deduplicated).toBe(false);
+    expect(retried.decision.outcome).toBe("applied");
+    expect(retried.decision.state.revision).toBe(1);
   });
 
   it.each([
