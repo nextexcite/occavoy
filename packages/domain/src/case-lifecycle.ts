@@ -141,18 +141,22 @@ export interface ProposalApproval {
   approvedAt: string;
 }
 
-export type CasePermission =
-  | "case.edit"
-  | "agent.result"
-  | "agent.stop"
-  | "supply.request"
-  | "supply.record"
-  | "proposal.write"
-  | "proposal.approve"
-  | "handoff.dispatch"
-  | "action.reconcile"
-  | "fulfillment.record"
-  | "case.close";
+export const casePermissionValues = [
+  "case.read",
+  "case.edit",
+  "agent.result",
+  "agent.stop",
+  "supply.request",
+  "supply.record",
+  "proposal.write",
+  "proposal.approve",
+  "handoff.dispatch",
+  "action.reconcile",
+  "fulfillment.record",
+  "case.close",
+] as const;
+
+export type CasePermission = (typeof casePermissionValues)[number];
 
 /** Derived by a trusted server, never copied from a request body or model response. */
 export interface CaseAuthority {

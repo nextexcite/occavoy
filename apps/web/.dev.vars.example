@@ -1,0 +1,3 @@
+# Copy to apps/web/.dev.vars for local Workers development.
+# Use a random local-only value of at least 32 characters; never commit the real file.
+OCCAVOY_WEB_CASE_GRANT_SIGNING_SECRET=
