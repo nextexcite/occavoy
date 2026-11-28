@@ -24,7 +24,9 @@ mise run bootstrap
 mise run dev
 ```
 
-The web preview runs at `http://localhost:3000`. In another terminal:
+The web preview runs at `http://localhost:3000`. Its Workers development boundary exposes a
+no-store `/api/health` endpoint and a signed-grant-restricted `/api/cases/:id` gate; the latter
+still fails closed before runtime access because no runtime/store integration is wired. In another terminal:
 
 ```sh
 mise run secrets:refresh
@@ -96,7 +98,8 @@ after adding its dependencies. See [experiments](experiments/README.md).
   emitted outbox intents. Explicit case activation is atomic in the local HTTP trace. The public
   intake route and live identity/grant resolution are not wired.
 - **Objects:** R2 with an application budget of **8,000,000,000 bytes**, shared across Occavoy's
-  managed environments. The Postgres quota ledger exists; live inventory reconciliation and
+  managed environments. The Workers `dev` configuration declares the server-only `OCCAVOY_EVIDENCE`
+  binding for evidence storage. The Postgres quota ledger exists; live inventory reconciliation and
   uploads remain disabled. An R2 binding is not a native 8 GB account quota.
 - **Additional execution:** Restate self-hosted is reserved for a separately justified workflow.
   Sandbox providers remain optional; see the [sandbox decision](docs/adr/0004-storage-and-sandbox-boundaries.md).

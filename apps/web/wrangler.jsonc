@@ -1,16 +1,38 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "occavoy-web",
-  "main": "@tanstack/react-start/server-entry",
+  "main": "src/server.ts",
   "compatibility_date": "2026-11-27",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true },
+    "traces": { "enabled": true }
+  },
   "vars": {
     "CUSTOMER_MARKET": "HK",
     "DESTINATION_SCOPE": "global",
     "R2_CAPACITY_BYTES": "8000000000",
     "UPLOADS_ENABLED": "false"
+  },
+  "env": {
+    "dev": {
+      "name": "occavoy-web-dev",
+      "vars": {
+        "CUSTOMER_MARKET": "HK",
+        "DESTINATION_SCOPE": "global",
+        "R2_CAPACITY_BYTES": "8000000000",
+        "UPLOADS_ENABLED": "false"
+      },
+      "r2_buckets": [
+        {
+          "binding": "OCCAVOY_EVIDENCE",
+          "bucket_name": "occavoy-dev-evidence"
+        }
+      ],
+      "secrets": { "required": ["OCCAVOY_WEB_CASE_GRANT_SIGNING_SECRET"] }
+    }
   }
-  // Add an R2 binding only after the persistent quota ledger is integrated.
-  // All environments must share the 8,000,000,000-byte Occavoy budget.
+  // R2 is evidence storage only. The application quota remains 8,000,000,000 bytes
+  // across Occavoy-managed environments; a binding is not a native account quota.
 }

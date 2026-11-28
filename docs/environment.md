@@ -44,6 +44,24 @@ contract test rejects differences in either direction.
 The runtime `dev` and `test` scripts preload it automatically, as does the vitest setup.
 Workers and browser code never auto-load it.
 
+## Cloudflare Workers development boundary
+
+`apps/web` currently has one explicit Cloudflare environment, `dev`, selected at dev/build time by
+`CLOUDFLARE_ENV=dev` in the package scripts. The generated deployable worker is `occavoy-web-dev`.
+It binds `OCCAVOY_EVIDENCE` to the intended development evidence bucket and keeps
+`UPLOADS_ENABLED=false`: R2 remains evidence storage only and the binding does not bypass the
+Postgres quota ledger.
+
+The case permission boundary needs `OCCAVOY_WEB_CASE_GRANT_SIGNING_SECRET`, a Workers-only HMAC
+secret. It is deliberately not part of the routine fnox local profile or root `.env.local` snapshot.
+For local Workers development, copy `apps/web/.dev.vars.example` to the ignored
+`apps/web/.dev.vars` and generate a local-only value of at least 32 characters. For hosted `dev`,
+the same secret name must be written through Cloudflare's secret mechanism only after the exact
+project-scoped credential path has been approved. Neither the local nor hosted value belongs in
+Git, command output, tickets, or the JavaScript bundle. A local dev/build without that value emits
+Wrangler's missing-required-secret warning; this is intentional fail-closed configuration, not a
+placeholder or deployment credential.
+
 `DATABASE_URL` remains application runtime configuration. Ordinary database-backed tests ignore it, including when it arrives through this snapshot. Those tests run only when `OCCAVOY_TEST_DATABASE_URL` is explicitly set to the disposable Compose target; the selector rejects other targets and query-option overrides before connecting. The explicit test selector is not part of the fnox local profile.
 
 The [runtime metrics listener](../apps/runtime/README.md#rivet-cloud-hosted-node) is cloud-only. Its optional `RIVETKIT_METRICS_PORT` setting is not part of the local profile and is ignored in local mode.
