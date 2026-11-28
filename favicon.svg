@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Occavoy icon</title>
+  <desc id="desc">A deep green lowercase o with a bronze northeast arrow, condensed from the Occavoy wordmark.</desc>
+  <path fill="#153d38" transform="translate(12.56 463.12) scale(0.64 -0.64)" d="M300 -12Q229 -12 171.0 21.0Q113 54 79.5 113.0Q46 172 46 248Q46 325 80.0 383.5Q114 442 172.0 475.0Q230 508 301 508Q373 508 431.0 475.0Q489 442 522.5 383.5Q556 325 556 248Q556 171 522.0 112.5Q488 54 430.5 21.0Q373 -12 300 -12ZM301 104Q333 104 359.5 120.0Q386 136 402.5 168.5Q419 201 419 248Q419 296 403.0 328.0Q387 360 360.5 376.0Q334 392 302 392Q270 392 243.0 376.0Q216 360 200.0 328.0Q184 296 184 248Q184 201 200.0 168.5Q216 136 242.5 120.0Q269 104 301 104Z"/>
+  <path fill="#b57b33" transform="translate(262.88 270.08) scale(0.36 -0.36)" d="M131 57 42 147 406 510H45V628H555L611 571V60H493V420Z"/>
+</svg>
