@@ -203,7 +203,13 @@ function customerView(snapshot: CaseSnapshot, viewer: Viewer, now: Date): Custom
     status = "Booking confirmed";
     next = "The supplier booking is confirmed for the original approved request.";
   }
-  if (snapshot.cancelRequested || snapshot.phase === "closed") {
+  if (snapshot.cancelRequested && snapshot.action && snapshot.phase !== "closed") {
+    status = "Cancellation requested";
+    next =
+      snapshot.booking === "confirmed"
+        ? "The original booking is confirmed. The service team is checking the cancellation; no cancellation or refund has been confirmed."
+        : "The service team is checking the original supplier request. Cancellation has been requested, not confirmed; do not resubmit.";
+  } else if (snapshot.cancelRequested || snapshot.phase === "closed") {
     status = snapshot.outcome === "fulfilled" ? "Completed" : "No further action";
     next = "This request is no longer open for a new approval.";
   }

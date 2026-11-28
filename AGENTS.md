@@ -48,6 +48,8 @@ Keep this file as the common instruction entry point. Do not regenerate `CLAUDE.
 
 When freshness or online work calls for it, use scoped `fnox -P local --no-defaults exec -- ...` or select the Doppler project and config explicitly for that command. When approving another local setting, update the mapping and loader together and run the profile contract test. Never print values. Portable ciphertext and key custody remain deferred to OCA-35; see [local environment](docs/environment.md).
 
+`DATABASE_URL` is application configuration, not permission for ordinary database tests. Those tests run only with an explicit disposable-target `OCCAVOY_TEST_DATABASE_URL`; that selector is never part of the routine fnox profile.
+
 ## Concurrent work
 
 - Prefer a separate branch or worktree for independent tasks. In a shared worktree, agree file ownership before editing.

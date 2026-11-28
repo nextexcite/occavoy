@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { demoEvents } from "@occavoy/domain";
-import { applyMigrations, PostgresCaseStore, PostgresUsageLedger } from "@occavoy/storage";
-import pg from "pg";
+import { PostgresCaseStore, PostgresUsageLedger } from "@occavoy/storage";
+import {
+  openTestSchema,
+  testDatabaseUrl,
+} from "../../../packages/storage/test/support/disposable-postgres.ts";
 import {
   agentCandidateCommandId,
   defaultScriptedCandidate,
@@ -14,7 +17,7 @@ import {
 } from "../dist/case-job-adapter.js";
 import { ServiceCaseCoordinator } from "../dist/service-case.js";
 
-const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_URL = testDatabaseUrl();
 const dbTest = DATABASE_URL ? test : test.skip;
 const NOW = new Date("2027-01-01T12:00:00Z");
 
@@ -348,8 +351,9 @@ test("deadline is rechecked after reservation before provider work may continue"
 dbTest(
   "service case waits for supplier without model work and recovers without duplicates",
   async (t) => {
-    const pool = new pg.Pool({ connectionString: DATABASE_URL });
-    await applyMigrations(pool);
+    const testSchema = await openTestSchema();
+    t.after(() => testSchema.close());
+    const pool = testSchema.pool;
     const store = new PostgresCaseStore(pool);
     const usageLedger = new PostgresUsageLedger(pool);
     const tenantId = `service-recover-${randomUUID()}`;
@@ -452,16 +456,15 @@ dbTest(
     assert.equal(activationDuplicate.deduplicated, true);
     assert.equal(runnerStarts, 1);
     assert.equal(activation.decision.state.revision, 1);
-
-    t.after(() => pool.end());
   },
 );
 
 dbTest(
   "a supplier RFQ cancelled before drain completes as stale without an external send",
   async (t) => {
-    const pool = new pg.Pool({ connectionString: DATABASE_URL });
-    await applyMigrations(pool);
+    const testSchema = await openTestSchema();
+    t.after(() => testSchema.close());
+    const pool = testSchema.pool;
     const store = new PostgresCaseStore(pool);
     const usageLedger = new PostgresUsageLedger(pool);
     const tenantId = `service-rfq-cancel-${randomUUID()}`;
@@ -513,14 +516,13 @@ dbTest(
     assert.deepEqual(supplierRequests, []);
     const outbox = await store.listOutboxForCase(tenantId, caseId);
     assert.equal(outbox[0].status, "completed");
-
-    t.after(() => pool.end());
   },
 );
 
 dbTest("a retried supplier RFQ is fenced again after a brief revision", async (t) => {
-  const pool = new pg.Pool({ connectionString: DATABASE_URL });
-  await applyMigrations(pool);
+  const testSchema = await openTestSchema();
+  t.after(() => testSchema.close());
+  const pool = testSchema.pool;
   const store = new PostgresCaseStore(pool);
   const usageLedger = new PostgresUsageLedger(pool);
   const tenantId = `service-rfq-revise-${randomUUID()}`;
@@ -595,15 +597,14 @@ dbTest("a retried supplier RFQ is fenced again after a brief revision", async (t
   assert.deepEqual(supplierAttempts, [`rfq-${caseId}`]);
   const outbox = await store.listOutboxForCase(tenantId, caseId);
   assert.equal(outbox[0].status, "completed");
-
-  t.after(() => pool.end());
 });
 
 dbTest(
   "cancel while a job runs aborts it, meters the attempt, and fences a late candidate",
   async (t) => {
-    const pool = new pg.Pool({ connectionString: DATABASE_URL });
-    await applyMigrations(pool);
+    const testSchema = await openTestSchema();
+    t.after(() => testSchema.close());
+    const pool = testSchema.pool;
     const store = new PostgresCaseStore(pool);
     const usageLedger = new PostgresUsageLedger(pool);
     const tenantId = `service-cancel-${randomUUID()}`;
@@ -711,16 +712,15 @@ dbTest(
     );
     assert.equal(candidateCommands.rows.length, 1);
     assert.equal(candidateCommands.rows[0].outcome, "ignored");
-
-    t.after(() => pool.end());
   },
 );
 
 dbTest(
   "a duplicate historical activation receipt does not abort the replacement job",
   async (t) => {
-    const pool = new pg.Pool({ connectionString: DATABASE_URL });
-    await applyMigrations(pool);
+    const testSchema = await openTestSchema();
+    t.after(() => testSchema.close());
+    const pool = testSchema.pool;
     const store = new PostgresCaseStore(pool);
     const usageLedger = new PostgresUsageLedger(pool);
     const tenantId = `service-duplicate-${randomUUID()}`;
@@ -806,14 +806,13 @@ dbTest(
     const finished = await store.getCase(tenantId, caseId);
     assert.equal(finished.activeTask, null);
     assert.equal(finished.brief.version, 2);
-
-    t.after(() => pool.end());
   },
 );
 
 dbTest("a task cancelled before its delayed dispatch never starts paid work", async (t) => {
-  const pool = new pg.Pool({ connectionString: DATABASE_URL });
-  await applyMigrations(pool);
+  const testSchema = await openTestSchema();
+  t.after(() => testSchema.close());
+  const pool = testSchema.pool;
   const store = new PostgresCaseStore(pool);
   const usageLedger = new PostgresUsageLedger(pool);
   const tenantId = `service-predrain-cancel-${randomUUID()}`;
@@ -853,15 +852,14 @@ dbTest("a task cancelled before its delayed dispatch never starts paid work", as
   assert.equal(runnerStarts, 0);
   assert.deepEqual(cancelCalls, ["task-predrain"]);
   assert.equal((await usageLedger.listUsage(tenantId, caseId)).length, 0);
-
-  t.after(() => pool.end());
 });
 
 dbTest(
   "brief revision aborts in-flight work and a stale candidate cannot replace the new brief",
   async (t) => {
-    const pool = new pg.Pool({ connectionString: DATABASE_URL });
-    await applyMigrations(pool);
+    const testSchema = await openTestSchema();
+    t.after(() => testSchema.close());
+    const pool = testSchema.pool;
     const store = new PostgresCaseStore(pool);
     const usageLedger = new PostgresUsageLedger(pool);
     const tenantId = `service-revise-${randomUUID()}`;
@@ -961,16 +959,15 @@ dbTest(
     assert.equal(late.decision.outcome, "ignored");
     assert.equal(late.decision.reason, "stale_case_revision");
     assert.equal((await store.getCase(tenantId, caseId)).brief.version, 2);
-
-    t.after(() => pool.end());
   },
 );
 
 dbTest(
   "closing a case closes only that allowance; the relationship gets a fresh follow-up case",
   async (t) => {
-    const pool = new pg.Pool({ connectionString: DATABASE_URL });
-    await applyMigrations(pool);
+    const testSchema = await openTestSchema();
+    t.after(() => testSchema.close());
+    const pool = testSchema.pool;
     const store = new PostgresCaseStore(pool);
     const usageLedger = new PostgresUsageLedger(pool);
     const tenantId = `service-close-${randomUUID()}`;
@@ -1043,17 +1040,15 @@ dbTest(
       [tenantId],
     );
     assert.equal(relationships.rows.length, 1);
-
-    t.after(() => pool.end());
   },
 );
 
 dbTest(
   "a budget-exhausted job records intervention evidence and frees the case for a new task",
   async (t) => {
-    const pool = new pg.Pool({ connectionString: DATABASE_URL });
-    await applyMigrations(pool);
-    t.after(() => pool.end());
+    const testSchema = await openTestSchema();
+    t.after(() => testSchema.close());
+    const pool = testSchema.pool;
     const store = new PostgresCaseStore(pool);
     const usageLedger = new PostgresUsageLedger(pool);
     const tenantId = `service-budget-stop-${randomUUID()}`;
@@ -1164,9 +1159,9 @@ dbTest(
 );
 
 dbTest("a first drain past the job deadline records expiry without any paid work", async (t) => {
-  const pool = new pg.Pool({ connectionString: DATABASE_URL });
-  await applyMigrations(pool);
-  t.after(() => pool.end());
+  const testSchema = await openTestSchema();
+  t.after(() => testSchema.close());
+  const pool = testSchema.pool;
   const store = new PostgresCaseStore(pool);
   const usageLedger = new PostgresUsageLedger(pool);
   const tenantId = `service-expiry-stop-${randomUUID()}`;
@@ -1230,9 +1225,9 @@ dbTest("a first drain past the job deadline records expiry without any paid work
 dbTest(
   "a crash after the stop commit neither re-runs the job nor writes a second stop",
   async (t) => {
-    const pool = new pg.Pool({ connectionString: DATABASE_URL });
-    await applyMigrations(pool);
-    t.after(() => pool.end());
+    const testSchema = await openTestSchema();
+    t.after(() => testSchema.close());
+    const pool = testSchema.pool;
     const store = new PostgresCaseStore(pool);
     const usageLedger = new PostgresUsageLedger(pool);
     const tenantId = `service-stop-crash-${randomUUID()}`;

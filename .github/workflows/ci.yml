@@ -30,9 +30,7 @@ jobs:
       - name: TypeScript, runtime and frontend
         run: pnpm check
         env:
-          DATABASE_URL: postgresql://127.0.0.1:54329/occavoy
-          PGUSER: occavoy
-          PGPASSWORD: occavoy # Disposable Compose fixture, not a project credential.
+          OCCAVOY_TEST_DATABASE_URL: postgresql://127.0.0.1:54329/occavoy
       - name: Python experiments
         run: pnpm check:python
       - name: Real local Rivet restart
@@ -41,6 +39,8 @@ jobs:
         run: pnpm verify:harness
       - name: Recover an HTTP-activated Postgres case on native Rivet
         run: pnpm verify:case-recovery
+      - name: Verify the saved London case through reconciliation
+        run: pnpm verify:london
       - name: Verify no generated changes
         run: git diff --exit-code
 

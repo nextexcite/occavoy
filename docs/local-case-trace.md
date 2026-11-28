@@ -11,11 +11,11 @@ Use the [local development setup](development.md) and the repository's disposabl
 ```sh
 docker compose up --detach --wait postgres
 mise exec -- pnpm --filter @occavoy/runtime build
-DATABASE_URL=postgresql://127.0.0.1:54329/occavoy PGUSER=occavoy PGPASSWORD=occavoy \
+OCCAVOY_TEST_DATABASE_URL=postgresql://127.0.0.1:54329/occavoy \
   mise exec -- node --import tsx --test apps/runtime/test/local-case-trace.test.mjs
 ```
 
-The test starts an ephemeral loopback HTTP listener and creates its own Postgres schema. Both are removed on completion. Look for **one passed test and zero skipped**: without `DATABASE_URL` the test skips. The public [web form](../apps/web/src/routes/case.tsx) remains a preview; the [intake handler](../apps/web/src/server/case-intake.ts) is only mounted by the test.
+The test starts an ephemeral loopback HTTP listener and creates its own Postgres schema. Both are removed on completion. Look for **one passed test and zero skipped**: without `OCCAVOY_TEST_DATABASE_URL` the test skips. The public [web form](../apps/web/src/routes/case.tsx) remains a preview; the [intake handler](../apps/web/src/server/case-intake.ts) is only mounted by the test.
 
 ## What happened
 

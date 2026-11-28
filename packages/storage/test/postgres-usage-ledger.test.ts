@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import { demoEvents } from "@occavoy/domain";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { applyMigrations } from "../src/migrations";
 import { PostgresCaseStore } from "../src/postgres-case-store";
 import { PostgresUsageLedger } from "../src/postgres-usage-ledger";
+import { openTestSchema, testDatabaseUrl } from "./support/disposable-postgres";
 
-const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_URL = testDatabaseUrl();
 const RUN_DB = DATABASE_URL ? describe : describe.skip;
 
 async function createCaseFixture(store: PostgresCaseStore, tenantId: string, caseId: string) {
@@ -58,20 +58,22 @@ async function insertRunningJob(
   );
 }
 
-RUN_DB("postgres usage ledger (requires DATABASE_URL)", () => {
+RUN_DB("postgres usage ledger (explicit disposable test target)", () => {
   let pool: pg.Pool;
   let store: PostgresCaseStore;
   let ledger: PostgresUsageLedger;
 
+  let testSchema: Awaited<ReturnType<typeof openTestSchema>> | undefined;
+
   beforeAll(async () => {
-    pool = new pg.Pool({ connectionString: DATABASE_URL });
+    testSchema = await openTestSchema();
+    pool = testSchema.pool;
     store = new PostgresCaseStore(pool);
     ledger = new PostgresUsageLedger(pool);
-    await applyMigrations(pool);
   });
 
   afterAll(async () => {
-    await pool.end();
+    await testSchema?.close();
   });
 
   it("persists reservation counters across a ledger instance replacement", async () => {

@@ -12,11 +12,12 @@ import {
 import { DeterministicEffectDispatcher } from "@occavoy/storage/effect-dispatcher";
 import { FakeSupplierAdapter } from "@occavoy/storage/fake-supplier";
 import pg from "pg";
+import { testDatabaseUrl } from "../../../packages/storage/test/support/disposable-postgres.ts";
 import { createCaseIntakeHandler } from "../../web/src/server/case-intake.ts";
 import { defaultScriptedCandidate, ScriptedCaseJobAdapter } from "../dist/case-job-adapter.js";
 import { ServiceCaseCoordinator } from "../dist/service-case.js";
 
-const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_URL = testDatabaseUrl();
 const dbTest = DATABASE_URL ? test : test.skip;
 
 // Real-database integration test: deadline/grant validity use real local time.

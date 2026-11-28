@@ -9,38 +9,50 @@ import {
   PostgresQuotaLedger,
   ReservationSizeMismatchError,
 } from "../src/index";
+import { testDatabaseUrl } from "./support/disposable-postgres";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = testDatabaseUrl();
 const request = (id: string, bytes: number) => ({ id, key: `objects/${id}`, bytes });
 
 describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
-  let admin: pg.Pool;
-  let pool: pg.Pool;
+  let admin: pg.Pool | undefined;
+  let pool: pg.Pool | undefined;
   let schema: string;
+  let schemaCreated = false;
   let scopedConnectionString: string;
   let ledger: PostgresQuotaLedger;
 
   beforeEach(async () => {
     // Isolate all connections, including racing admissions, without weakening the singleton CHECK
     // or temporarily changing the real budget. Never fall back to the public schema.
+    schemaCreated = false;
+    pool = undefined;
+    admin = undefined;
     schema = `test_quota_${randomUUID().replaceAll("-", "")}`;
     admin = new pg.Pool({ connectionString: databaseUrl });
-    await admin.query("CREATE SCHEMA " + pg.escapeIdentifier(schema));
+    await admin!.query("CREATE SCHEMA " + pg.escapeIdentifier(schema));
+    schemaCreated = true;
     const scopedUrl = new URL(databaseUrl ?? "");
     scopedUrl.searchParams.set("options", `-c search_path=${schema}`);
     scopedConnectionString = scopedUrl.href;
     pool = new pg.Pool({ connectionString: scopedConnectionString });
-    expect((await pool.query("SELECT current_schema() AS schema")).rows[0]?.schema).toBe(schema);
+    expect((await pool!.query("SELECT current_schema() AS schema")).rows[0]?.schema).toBe(schema);
     await applyMigrations(pool);
     ledger = new PostgresQuotaLedger(pool);
   });
 
   afterEach(async () => {
+    const cleanupAdmin = admin;
     try {
       await pool?.end();
-      await admin.query("DROP SCHEMA IF EXISTS " + pg.escapeIdentifier(schema) + " CASCADE");
+      if (schemaCreated && cleanupAdmin) {
+        await cleanupAdmin.query(
+          "DROP SCHEMA IF EXISTS " + pg.escapeIdentifier(schema) + " CASCADE",
+        );
+        schemaCreated = false;
+      }
     } finally {
-      await admin.end();
+      await cleanupAdmin?.end();
     }
   });
 
@@ -49,7 +61,7 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
     await ledger.commit("existing", bytes);
   }
   async function reservation(id: string) {
-    return (await pool.query("SELECT * FROM object_reservation WHERE id = $1", [id])).rows[0];
+    return (await pool!.query("SELECT * FROM object_reservation WHERE id = $1", [id])).rows[0];
   }
 
   it("admits only one racing upload at the hard cap and rolls back the loser", async () => {
@@ -63,7 +75,7 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(results.find((r) => r.status === "rejected")?.reason).toBeInstanceOf(CapacityExceeded);
     expect(put).toHaveBeenCalledTimes(1);
-    expect((await pool.query("SELECT id FROM object_reservation")).rowCount).toBe(2);
+    expect((await pool!.query("SELECT id FROM object_reservation")).rowCount).toBe(2);
     expect(await ledger.getBudgetReport()).toMatchObject({
       committedBytes: CAP,
       reservedBytes: 0,
@@ -81,7 +93,7 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
     expect(put).not.toHaveBeenCalled();
     expect(await ledger.reserve(request("over-cap", 2), CAP + 1)).toBe(false);
     expect(await reservation("over-cap")).toBeUndefined();
-    expect(() => new PostgresQuotaLedger(pool, { budgetId: "other" })).toThrow();
+    expect(() => new PostgresQuotaLedger(pool!, { budgetId: "other" })).toThrow();
     expect(await ledger.reserve(request("over-cap", 1))).toBe(true);
     expect(await ledger.reserve(request("over-cap", 1))).toBe(false);
   });
@@ -157,18 +169,18 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
   it("expires only due reservations, holds the bytes, and detects counter drift in one report", async () => {
     await prefill(7);
     await ledger.reserve(request("fresh", 3));
-    const shortLedger = new PostgresQuotaLedger(pool, { defaultTtlMs: 1000 });
+    const shortLedger = new PostgresQuotaLedger(pool!, { defaultTtlMs: 1000 });
     await shortLedger.reserve(request("stale", 2));
     // PG timestamps have microseconds; use an exact deterministic cutoff to test <=.
     const cutoff = new Date("2000-01-01T00:00:00.000Z");
     expect(
       (
-        await pool.query(
+        await pool!.query(
           "SELECT expires_at - created_at = interval '1 second' AS ttl_ok FROM object_reservation WHERE id = 'stale'",
         )
       ).rows[0]?.ttl_ok,
     ).toBe(true);
-    await pool.query("UPDATE object_reservation SET expires_at = $1 WHERE id = 'stale'", [cutoff]);
+    await pool!.query("UPDATE object_reservation SET expires_at = $1 WHERE id = 'stale'", [cutoff]);
     expect(await ledger.reconcileExpiredReservations(cutoff)).toEqual([
       { ...request("stale", 2), expiresAt: cutoff },
     ]);
@@ -186,7 +198,7 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
       unknownReservations: 1,
       discrepancyBytes: 0,
     });
-    await pool.query(
+    await pool!.query(
       "UPDATE object_budget SET committed_bytes = 6, reserved_bytes = 6 WHERE id = 'occavoy'",
     );
     expect((await ledger.getBudgetReport()).discrepancyBytes).toBe(2);
@@ -196,7 +208,7 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
     await ledger.reserve(request("oversized-observed", 4));
     const mismatchPool = new pg.Pool({ connectionString: scopedConnectionString, max: 1 });
     const admissionPool = new pg.Pool({ connectionString: scopedConnectionString, max: 1 });
-    const blocker = await pool.connect();
+    const blocker = await pool!.connect();
     let blockerReleased = false;
     const releaseBlocker = async () => {
       if (blockerReleased) return;
@@ -220,7 +232,7 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
         async () => {
           expect(
             (
-              await admin.query("SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked", [
+              await admin!.query("SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked", [
                 mismatchPid,
               ])
             ).rows[0].blocked,
@@ -236,7 +248,7 @@ describe.skipIf(databaseUrl === undefined)("Postgres R2 quota ledger", () => {
         async () => {
           expect(
             (
-              await admin.query("SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked", [
+              await admin!.query("SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked", [
                 admissionPid,
               ])
             ).rows[0].blocked,

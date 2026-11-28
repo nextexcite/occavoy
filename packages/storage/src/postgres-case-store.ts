@@ -199,7 +199,10 @@ function eventRow(row: QueryResultRow): CaseDomainEventRow {
  * entry, domain events and outbox intents; no actor checkpoint is an authority.
  */
 export class PostgresCaseStore {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly clock: () => Date = () => new Date(),
+  ) {}
 
   async createRelationship(
     relationship: CustomerRelationship,
@@ -556,7 +559,12 @@ export class PostgresCaseStore {
       return { deduplicated: false, decision: rejected, outboxIds: [] };
     }
     const before = caseResult.rows[0].snapshot as CaseSnapshot;
-    const decision = decideCase(before, command, context);
+    const atHandoff = command.kind === "dispatch_handoff" || command.kind === "retry_handoff";
+    const decision = decideCase(
+      before,
+      command,
+      atHandoff ? { ...context, now: this.clock() } : context,
+    );
     const outboxIds: string[] = [];
     if (decision.outcome === "applied") {
       const next = decision.state;

@@ -177,6 +177,7 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
   };
 
   let terminalPrompt = "";
+  let handlerClockMs = Date.now() - 10_000;
   const handleCase = createCaseReturnHandler({
     resolveViewer: async (request) => {
       if (request.headers.get("authorization") === operatorBearer) {
@@ -192,6 +193,9 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
       return { role: "customer", authority: customerAuthority };
     },
     store,
+    ...(!walkthrough
+      ? { now: () => new Date((handlerClockMs = Math.max(handlerClockMs + 1, Date.now() - 1000))) }
+      : {}),
     approve: (input) => approveMutation(input),
     lookup: (input) => lookupMutation(input),
     getWalkthroughHint: () =>
@@ -647,8 +651,21 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
       "dispatcher rejected dispatch before payer approval; supplier not called",
     );
 
+    let overlappingApprovals = 0;
+    const overlappingApprovedAts = [];
+    const overlappingCommands = [];
+    let releaseOverlappingApprovals;
+    const bothOverlappingApprovals = new Promise((resolve) => {
+      releaseOverlappingApprovals = resolve;
+    });
     approveMutation = async ({ approval, expectedRevision, viewer }) => {
       assert.ok(Number.isFinite(Date.parse(approval.approvedAt)));
+      if (!walkthrough) {
+        overlappingApprovals += 1;
+        if (overlappingApprovals <= 2) overlappingApprovedAts.push(approval.approvedAt);
+        if (overlappingApprovals === 2) releaseOverlappingApprovals();
+        if (overlappingApprovals <= 2) await bothOverlappingApprovals;
+      }
       assert.deepEqual(
         { ...approval, approvedAt: "<server-clock>" },
         {
@@ -666,15 +683,13 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
           approvedAt: "<server-clock>",
         },
       );
+      const body = { kind: "approve_proposal", approval, tenantId, caseId, expectedRevision };
+      const command = { ...body, commandId: `london-approve-${sha256(canonicalJson(body))}` };
+      if (!walkthrough && overlappingCommands.length < 2) {
+        overlappingCommands.push({ command, authority: viewer.authority });
+      }
       const result = await coordinator.submit({
-        command: {
-          kind: "approve_proposal",
-          approval,
-          tenantId,
-          caseId,
-          expectedRevision,
-          commandId: `london-approve-${proposal.id}-v${proposal.version}`,
-        },
+        command,
         authority: viewer.authority,
       });
       if (result.decision.outcome === "applied") return { status: "applied" };
@@ -691,12 +706,33 @@ export async function presentLondon({ t, store, ledger, grant, walkthrough, regi
     if (walkthrough) {
       await walkthroughApprovalPause();
     } else {
-      const approvedResponse = await browser.post(approvalAction);
-      assert.equal(approvedResponse.status, 303);
+      const revisionBeforeApproval = (await store.getCase(tenantId, caseId)).revision;
+      const approvalResponses = await Promise.all([
+        browser.post(approvalAction),
+        browser.post(approvalAction),
+      ]);
+      assert.deepEqual(approvalResponses.map((response) => response.status).sort(), [303, 409]);
+      const approvedResponse = approvalResponses.find((response) => response.status === 303);
       assert.equal(approvedResponse.headers.get("location"), CASE_PATH);
       const followedApproval = await browser.get(approvedResponse.headers.get("location"));
       assert.equal(followedApproval.status, 200);
       assert.ok((await followedApproval.text()).includes("Approved"));
+      assert.equal(overlappingApprovedAts.length, 2);
+      assert.notEqual(overlappingApprovedAts[0], overlappingApprovedAts[1]);
+      const afterOverlap = await store.getCase(tenantId, caseId);
+      assert.equal(afterOverlap.revision, revisionBeforeApproval + 1);
+      assert.ok(afterOverlap.approval);
+      const winning = overlappingCommands.find(
+        (entry) => entry.command.approval.approvedAt === afterOverlap.approval.approvedAt,
+      );
+      assert.ok(winning);
+      const replay = await coordinator.submit({
+        command: winning.command,
+        authority: winning.authority,
+      });
+      assert.equal(replay.deduplicated, true);
+      assert.equal(replay.decision.outcome, "applied");
+      assert.equal((await store.getCase(tenantId, caseId)).revision, afterOverlap.revision);
     }
     const revisionAfterApproval = (await store.getCase(tenantId, caseId)).revision;
     assert.equal((await browser.post(approvalAction)).status, 409);

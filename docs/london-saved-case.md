@@ -10,17 +10,19 @@ Recorded on local main at `fbb4dc3`: the interactive test passed in 317.2 second
 
 ### Stage decision and follow-up
 
-The local synthetic London stage is complete. A Pi source review of `fbb4dc3` using GPT-6 Astra at high thinking found no P0 within that scope. The review did not run tests; the recorded browser and terminal run is the separate execution evidence. Five P2 findings remain open:
+The local synthetic London stage is complete. A Pi source review of `fbb4dc3` using GPT-6 Astra at high thinking found no P0 within that scope. The review did not run tests; the recorded browser and terminal run is the separate execution evidence. The review identified five P2 findings at that commit:
 
-| Before shared dev | Regression to add |
-| --- | --- |
-| Recheck quote and approval expiry at dispatch, not only before waiting on the database. | Hold the case lock across expiry; no supplier call may follow. |
-| Show cancellation and an unresolved supplier result together. | Cancel after a lost reply; the customer must still see that the original order is being checked. |
-| Handle simultaneous clicks on the exact approval. | Two concurrent POSTs with different server times must produce one approval and no internal error. |
-| Isolate ordinary database tests as strictly as the London fixture. | Reject non-test targets before migration; leave unrelated schemas untouched. |
-| Run the unattended London path in CI. | Require `verify:london` in addition to the RFQ-only recovery check. |
+| Review finding                                                                          | Regression                                                                                        |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Recheck quote and approval expiry at dispatch, not only before waiting on the database. | Hold the case lock across expiry; no supplier call may follow.                                    |
+| Show cancellation and an unresolved supplier result together.                           | Cancel after a lost reply; the customer must still see that the original order is being checked.  |
+| Handle simultaneous clicks on the exact approval.                                       | Two concurrent POSTs with different server times must produce one approval and no internal error. |
+| Isolate ordinary database tests as strictly as the London fixture.                      | Reject non-test targets before migration; leave unrelated schemas untouched.                      |
+| Run the unattended London path in CI.                                                   | Require `verify:london` in addition to the RFQ-only recovery check.                               |
 
-The proposed next proof is the same synthetic case on a private `dev` runtime and isolated Postgres. First close the five gaps and reproduce the local counters there without a live model. Then qualify one separately capped inference task; model output remains a candidate, never an approval or a booking. Neither hosted run has been performed as part of this stage.
+The proposed next proof is the same synthetic case on a private `dev` runtime and isolated Postgres. Reproduce the locally verified counters there without a live model. Then qualify one separately capped inference task; model output remains a candidate, never an approval or a booking. Neither hosted run has been performed as part of this stage.
+
+Local follow-up on the current source: the five review gaps now have focused local regressions. Dispatch freshness is rechecked under the case-row lock and again immediately before supplier send; cancellation can be shown alongside an unresolved supplier result; overlapping exact approval posts are exercised through real HTTP; ordinary database tests require the explicit disposable-target selector and owned schemas; and the CI definition includes the unattended London reconciliation check. This does not change the recorded `fbb4dc3` verdict or artifact, and it is not evidence that a hosted dev run or remote CI execution has happened.
 
 ## Run it
 

@@ -44,6 +44,8 @@ contract test rejects differences in either direction.
 The runtime `dev` and `test` scripts preload it automatically, as does the vitest setup.
 Workers and browser code never auto-load it.
 
+`DATABASE_URL` remains application runtime configuration. Ordinary database-backed tests ignore it, including when it arrives through this snapshot. Those tests run only when `OCCAVOY_TEST_DATABASE_URL` is explicitly set to the disposable Compose target; the selector rejects other targets and query-option overrides before connecting. The explicit test selector is not part of the fnox local profile.
+
 The [runtime metrics listener](../apps/runtime/README.md#rivet-cloud-hosted-node) is cloud-only. Its optional `RIVETKIT_METRICS_PORT` setting is not part of the local profile and is ignored in local mode.
 
 ## One-off commands: `pnpm local:exec`
@@ -79,13 +81,16 @@ there is no copying snapshots between machines or reverse-syncing values back in
 store. The portable ciphertext-publication lane and its key custody are deferred to
 Linear OCA-35.
 
+The shared inference settings (OPENAI_API_KEY, OPENAI_BASE_URL and OPENAI_WIRE_API) live in the Doppler root config and are inherited by local and dev only. They are not part of the routine local snapshot; rotate the parent rather than adding child overrides.
+
 ## Hygiene
 
 - Never pass secret values as CLI arguments, print them, or paste them into issues, logs,
   or screenshots. Verify presence, not content.
 - The Compose Postgres fixture at `postgresql://127.0.0.1:54329/occavoy` with the public
-  local-only `occavoy`/`occavoy` credentials is a safe example `DATABASE_URL` target — a
-  disposable loopback database, never a shared or production one.
+  local-only `occavoy`/`occavoy` credentials is a safe example application `DATABASE_URL`
+  target — a disposable loopback database, never a shared or production one. Database-backed
+  tests require the separate exact `OCCAVOY_TEST_DATABASE_URL` opt-in.
 - Do not copy another checkout's `.env.local` snapshot; refresh per checkout.
 - Missing access fails closed and is reported by variable name; do not select another
   project's source or broaden the profile to make a check pass.

@@ -18,8 +18,9 @@ import {
   PostgresCaseStore,
   type StoredCommandResult,
 } from "../src/postgres-case-store";
+import { testDatabaseUrl } from "./support/disposable-postgres";
 
-const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_URL = testDatabaseUrl();
 const RUN_DB = DATABASE_URL ? describe : describe.skip;
 
 const NOW = new Date("2027-01-01T12:00:00Z");
@@ -303,11 +304,12 @@ async function runJourney(harness: Harness) {
   return { quote, proposal };
 }
 
-RUN_DB("postgres case store (requires DATABASE_URL)", () => {
+RUN_DB("postgres case store (explicit disposable test target)", () => {
   let pool: pg.Pool;
   let admin: pg.Pool;
   let store: PostgresCaseStore;
   const schema = `oca4_${randomUUID().replaceAll("-", "")}`;
+  let schemaCreated = false;
 
   beforeAll(async () => {
     admin = new pg.Pool({ connectionString: DATABASE_URL });
@@ -315,18 +317,21 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
       schema,
     ]);
     await admin.query(create.rows[0].ddl);
+    schemaCreated = true;
     pool = new pg.Pool({ connectionString: DATABASE_URL, options: `-c search_path=${schema}` });
-    store = new PostgresCaseStore(pool);
+    store = new PostgresCaseStore(pool, () => NOW);
     await applyMigrations(pool);
   });
 
   afterAll(async () => {
     await pool?.end();
     if (admin) {
-      const drop = await admin.query("SELECT format('DROP SCHEMA %I CASCADE', $1::text) AS ddl", [
-        schema,
-      ]);
-      await admin.query(drop.rows[0].ddl);
+      if (schemaCreated) {
+        const drop = await admin.query("SELECT format('DROP SCHEMA %I CASCADE', $1::text) AS ddl", [
+          schema,
+        ]);
+        await admin.query(drop.rows[0].ddl);
+      }
       await admin.end();
     }
   });
@@ -365,6 +370,7 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
 
   it("serializes concurrent first-time initialization in the same schema", async () => {
     const schema = `mig_race_${randomUUID().replaceAll("-", "")}`;
+    let raceSchemaCreated = false;
     const poolA = new pg.Pool({
       connectionString: DATABASE_URL,
       options: `-c search_path=${schema}`,
@@ -375,6 +381,7 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
     });
     try {
       await pool.query(`CREATE SCHEMA ${schema}`);
+      raceSchemaCreated = true;
       const [appliedA, appliedB] = await Promise.all([
         applyMigrations(poolA),
         applyMigrations(poolB),
@@ -391,7 +398,7 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
     } finally {
       await poolA.end();
       await poolB.end();
-      await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      if (raceSchemaCreated) await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
     }
   });
 
@@ -482,7 +489,11 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
       { command_id: command.commandId, status: "completed", outcome: "applied" },
     ]);
 
-    const replay = await new PostgresCaseStore(pool).createAndActivateCase(input, command, context);
+    const replay = await new PostgresCaseStore(pool, () => NOW).createAndActivateCase(
+      input,
+      command,
+      context,
+    );
     expect(replay.deduplicated).toBe(true);
     expect(replay.decision).toEqual(original.decision);
     expect(replay.outboxIds).toEqual(original.outboxIds);
@@ -837,7 +848,7 @@ RUN_DB("postgres case store (requires DATABASE_URL)", () => {
       }),
     );
     // Simulated restart: a fresh store instance observes the stranded claim.
-    const freshStore = new PostgresCaseStore(pool);
+    const freshStore = new PostgresCaseStore(pool, () => NOW);
     const t0 = new Date("2027-01-01T00:00:00Z");
     // Keep eligibility and lease expiry on the same simulated clock.
     const seeded = await pool.query(
