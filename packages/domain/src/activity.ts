@@ -66,6 +66,8 @@ export const activitySessionSchema = z
     end: activityTimePointSchema.optional(),
     walkInOpening: openingWindowSchema.optional(),
     registrationDeadline: activityTimePointSchema.optional(),
+    /** Exact reception/assembly/check-in time when stated; not a cutoff unless the source says so. */
+    checkInTime: activityTimePointSchema.optional(),
     checkInDeadline: activityTimePointSchema.optional(),
   })
   .superRefine((value, ctx) => {
@@ -86,6 +88,8 @@ export const activityScheduleSchema = z
     end: activityTimePointSchema.optional(),
     walkInOpening: openingWindowSchema.optional(),
     registrationDeadline: activityTimePointSchema.optional(),
+    /** Exact reception/assembly/check-in time when stated; not a cutoff unless the source says so. */
+    checkInTime: activityTimePointSchema.optional(),
     checkInDeadline: activityTimePointSchema.optional(),
     sessions: z.array(activitySessionSchema).max(40).default([]),
   })
@@ -144,6 +148,7 @@ export const activityFieldEvidenceSchema = z.strictObject({
     "price",
     "opening",
     "registration_deadline",
+    "check_in_time",
     "check_in_deadline",
   ]),
   locator: z.string().min(1).max(240),
@@ -320,11 +325,7 @@ export function mapEventsquareOccurrence0_1_0(
   }
   const claimEvidence = record.candidate.claims.flatMap((claim) => {
     const field =
-      claim.field === "names"
-        ? "title"
-        : claim.field === "url" || claim.field === "location"
-          ? "place"
-          : claim.field;
+      claim.field === "names" ? "title" : claim.field === "location" ? "place" : claim.field;
     if (!activityFieldEvidenceSchema.shape.field.options.includes(field as never)) return [];
     return [
       {

@@ -146,7 +146,7 @@ describe("sourced activity occurrence contract", () => {
     expect(closedRegistration?.bookability.state).toBe("not_assessed");
   });
 
-  it("keeps event start, walk-in opening, registration deadline and check-in deadline distinct", () => {
+  it("keeps event start, walk-in opening, registration deadline and reception time distinct", () => {
     const workshop = japanActivitySeeds.find(
       (seed) => seed.id === "jp-tcd-2682-tokyo-atlas-ito-no-toi",
     );
@@ -155,7 +155,8 @@ describe("sourced activity occurrence contract", () => {
       date: "2026-12-05",
       time: "17:00",
     });
-    expect(workshop?.schedule.checkInDeadline).toMatchObject({ date: "2026-12-06", time: "09:45" });
+    expect(workshop?.schedule.checkInTime).toMatchObject({ date: "2026-12-06", time: "09:45" });
+    expect(workshop?.schedule.checkInDeadline).toBeUndefined();
     const concert = japanActivitySeeds.find((seed) => seed.id === "jp-ln-khalid-tokyo-2026-12-03");
     expect(concert?.schedule.start).toMatchObject({ time: "19:00" });
     expect(concert?.schedule.walkInOpening).toMatchObject({ opensAt: "18:00" });
@@ -311,6 +312,23 @@ describe("thin Eventsquare mapping", () => {
     expect(mapped.bookability.state).toBe("not_assessed");
     expect(mapped.provenance.nativeId).toBe("native-1");
     expect(mapped.provenance.fieldEvidence.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("does not count source URL evidence as evidence of place", () => {
+    const input = eventsquareRecord({
+      precision: "instant",
+      start: "2026-12-06T10:00:00+09:00",
+      original: "2026年12月6日 10:00",
+    }) as ReturnType<typeof eventsquareRecord> & {
+      candidate: { location?: string; claims: Array<{ field: string; value?: unknown }> };
+    };
+    Reflect.deleteProperty(input.candidate, "location");
+    input.candidate.claims = input.candidate.claims.map((claim) =>
+      claim.field === "location"
+        ? { ...claim, field: "url", value: "https://source.example/events/1" }
+        : claim,
+    );
+    expect(() => mapEventsquareOccurrence0_1_0(input, occavoyOverlay())).toThrow();
   });
 
   it("maps a date-only occurrence without inventing midnight", () => {
