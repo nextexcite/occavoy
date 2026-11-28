@@ -31,3 +31,4 @@ artifacts/
 !.mcp.example.json
 experiments/*/data/private/
 experiments/*/results/
+.runtime-verification.json

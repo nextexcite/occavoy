@@ -83,6 +83,26 @@ Linear OCA-35.
 
 The shared inference settings (OPENAI_API_KEY, OPENAI_BASE_URL and OPENAI_WIRE_API) live in the Doppler root config and are inherited by local and dev only. They are not part of the routine local snapshot; rotate the parent rather than adding child overrides.
 
+## Dev binding reconciliation (OCA-2)
+
+OCA-4 provisioned a claimable Prisma Postgres instance for dev. A missing `DATABASE_URL` name and an expired or deleted database are different outcomes. Check the existing binding first; do not look up a claim link or recover a URL from logs.
+
+Run this names-only check **only inside the approved credential delivery**, with a clean CLI home and the read-only `occavoy/dev` service token already in the process environment. Confirm its scope from the issuance record: a service token's bound config takes precedence over CLI selectors. Do not use the ordinary personal login, replace the token, enable shell tracing or pass a secret via argv.
+
+```bash
+(
+  set -euo pipefail
+  : "${DOPPLER_TOKEN:?missing scoped dev delivery}"
+  doppler secrets --only-names --json --no-check-version --attempts 1 \
+    --project occavoy --config dev |
+    jq -ers 'if length == 1 and (.[0] | type == "object" and all(.[]; . == {}))
+      then if (.[0] | has("DATABASE_URL")) then "DATABASE_URL: listed" else "DATABASE_URL: not listed" end
+      else error("unexpected names response") end'
+)
+```
+
+The output means only that a name was or was not listed. An unsuccessful request is **unknown**, not missing. Reconcile with authorized config-scoped activity metadata and have the database owner verify the original instance's status, identity and isolation. If that history is unavailable to the scoped credential, obtain a value-free owner attestation; do not fall back to a broader token, workplace activity, a config-log diff or a different config. Neither a listing nor the original provisioning receipt authorizes a connection, restoration, migration or replacement.
+
 ## Hygiene
 
 - Never pass secret values as CLI arguments, print them, or paste them into issues, logs,

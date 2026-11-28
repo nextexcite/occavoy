@@ -112,7 +112,7 @@ mise exec -- pnpm --filter @occavoy/runtime verify:live --prepare
 mise exec -- pnpm --filter @occavoy/runtime verify:live --resume
 ```
 
-The checkpoint contains only a synthetic actor key and expected revision; no token. Run both commands from the same directory. By default verification permits only a local endpoint. Testing a remote isolated demo namespace additionally requires `OCCAVOY_VERIFY_REMOTE=1` and `OCCAVOY_RUNTIME_VERIFY_ENDPOINT`; this does not authorize deploying anything.
+The private checkpoint records the resolved actor ID and expected paused revision, not a token. Use the same directory for both phases and a fresh checkpoint path for each run (`OCCAVOY_RUNTIME_CHECKPOINT`). Resume addresses that ID without creating an actor. This verifier uses the standard local engine credentials and accepts only a plain loopback HTTP origin; the former remote opt-in is not supported.
 
 ## Legacy command probe client API
 
@@ -143,15 +143,20 @@ Cloud mode uses `runtime:"native"`, `startEngine:false`, and `startServices:fals
 
 The production image omits the local engine CLI and development services; use the workspace for local engine runs. In cloud mode the runtime serves Prometheus metrics at `http://127.0.0.1:9464/metrics` inside the container. Set `RIVETKIT_METRICS_PORT` only if a different port is needed. Keep it distinct from `PORT` and other listeners; a bind collision stops startup. Scraping from inside the container does not prove that a hosted collector can reach it.
 
-After a cluster and Docker access have been explicitly set up, the documented deployment path from the repository root is:
+### Private dev checkpoint (OCA-2)
 
-```sh
-mise exec -- pnpm exec rivet login
-mise exec -- pnpm exec rivet link --org ORGANIZATION --cluster CLUSTER
-mise exec -- pnpm exec rivet deploy --dockerfile apps/runtime/Dockerfile --build-context .
-```
+[OCA-2](https://linear.app/tianjis/issue/OCA-2) is a hosted qualification, not a deployment recipe. Local image construction, a ready build and `/healthz` are not a checkpoint. Do not run local verification drivers against Cloud.
 
-These commands are instructions, not a record that deployment happened. The image builds with the workspace lockfile and `pnpm deploy --prod`. Public app liveness is `https://CLUSTER.onrivet.dev/healthz`; actor gateway/API is `https://CLUSTER-api.onrivet.dev`. Do not add automatic deploy-on-PR CI during bootstrap. A successful local test or Docker build does not prove cloud credentials, quotas, HA or recovery.
+Before any hosted write, the owners must supply or confirm:
+
+- A read-only delivery scoped to Doppler `occavoy/dev`, through the approved secret channel. Bind only the named settings needed by each process. No whole-config export, broad fallback, copied snapshot, secret in argv or inherited `OPENAI_*` in a synthetic run.
+- Reconcile the existing OCA-4 Prisma Postgres dev binding (`occavoy/dev:DATABASE_URL`). Its absence from a config read does not establish that the instance was deleted. With scoped access, check authorized value-free activity history and confirm the original instance's identity, claim status, isolation and permitted use. Do not recover the URL from logs or provision, restore or migrate a database to fill the gap. The minimal `demoCase` checkpoint uses actor SQLite and does not need this binding injected. [Names-only CLI check](../../docs/environment.md#dev-binding-reconciliation-oca-2).
+- The private ingress and explicit organization, cluster, region and dedicated non-default pool, the exact image revision, resource limits, secret references and a bounded replacement/cleanup plan. Prove actor creation and worker placement are confined to that pool; a CLI deployment target alone is insufficient. Stop on an unknown or default route. Obtain approval for the exact operations, including actor creation, credential issuance if needed, and replacing just the probe worker.
+- Separate gateway and actor authentication. For the pinned [3.1.1 gateway](https://github.com/rivet-dev/rivet/blob/v3.1.1/docs/api/content/authentication.mdx), use a backend client with a short-lived `actor_gateway:read` grant on the exact actor ID after authorized creation. That grant allows actor actions; it does not grant creation by key or replace the `authToken` connection parameter checked by `demoCase`. Confirm how the client receives its grant without reusing a node or control-plane secret. Use secret references for deployment, never literal secret values.
+
+Once approved, start one synthetic `demoCase` in the dedicated pool. Wait for `awaiting_input`, pause and read the committed paused revision 1. Record the real actor ID privately. Confirm replacement of the serving worker from the platform, then reconnect **by that same ID**, not `getOrCreate`. Require the same paused state before resume, `client_input` at revision 2, and one synthetic input applied at revision 3. A duplicate must not advance the revision. Check missing/invalid gateway access separately from a valid gateway credential with a wrong actor token: require explicit authorization denials and a successful authorized read, not a generic network failure. Keep raw IDs and logs private; report equality, build revision, observed transitions and redacted results only. Stop at this gate.
+
+The [London replay](../../docs/london-saved-case.md) needs a separate private synthetic host: the standard registry has no Pi invoker or `caseJob`. Keep the Compose/loopback driver local; do not expose fixture controls. Use the isolated Postgres ledger, faux model and fake supplier, and match the local counters there before considering one separately approved, capped candidate-only inference task. No real supplier, charge or booking.
 
 ## Primary references
 

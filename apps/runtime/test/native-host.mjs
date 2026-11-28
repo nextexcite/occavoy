@@ -49,10 +49,10 @@ async function unusedPort() {
   return port;
 }
 
-function inheritedEnvironment() {
+export function inheritedEnvironment(source = process.env) {
   const inherited = {};
   for (const name of INHERITED_ENV_NAMES) {
-    const value = process.env[name];
+    const value = source[name];
     if (value !== undefined) inherited[name] = value;
   }
   return inherited;
