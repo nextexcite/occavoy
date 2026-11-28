@@ -19,16 +19,19 @@ export const caseIntakeSchema = z.strictObject({
 export const destinationSchema = z.object({
   countryCode: z.string().regex(/^[A-Z]{2}$/),
   city: z.string().min(1),
-  timeZone: z.string().refine((value) => {
-    // Intl also accepts fixed offsets, which do not carry IANA daylight-saving rules.
-    if (/^[+-]/.test(value)) return false;
-    try {
-      new Intl.DateTimeFormat("en", { timeZone: value }).format();
-      return true;
-    } catch {
-      return false;
-    }
-  }, "An IANA time zone is required"),
+  timeZone: z
+    .string()
+    .refine((value) => {
+      // Intl also accepts fixed offsets, which do not carry IANA daylight-saving rules.
+      if (/^[+-]/.test(value)) return false;
+      try {
+        new Intl.DateTimeFormat("en", { timeZone: value }).format();
+        return true;
+      } catch {
+        return false;
+      }
+    }, "An IANA time zone is required when one is recorded")
+    .optional(),
 });
 
 export const eventSchema = z
@@ -152,3 +155,6 @@ export const demoEvents: EventRecord[] = [
     evidenceKind: "fixture",
   },
 ];
+
+export * from "./activity";
+export * from "./activity-seeds";

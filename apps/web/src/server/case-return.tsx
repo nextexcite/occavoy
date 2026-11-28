@@ -62,22 +62,25 @@ function formatMoney(money: { amountMinor: number; currency: string }): string {
 
 function eventWhen(snapshot: CaseSnapshot): string {
   const event = snapshot.sourceEvent;
-  const timeZone = event.destination.timeZone;
+  const sourceTimeZone = event.destination.timeZone;
+  // UTC is an explicit display fallback only; it is not written back as the event's zone.
+  const displayTimeZone = sourceTimeZone ?? "UTC";
+  const zoneLabel = sourceTimeZone ?? "UTC display · source timezone unknown";
   const date = new Intl.DateTimeFormat("en-HK", {
     dateStyle: "full",
-    timeZone,
+    timeZone: displayTimeZone,
   }).format(new Date(event.startsAt));
   const start = new Intl.DateTimeFormat("en-HK", {
     hour: "numeric",
     minute: "2-digit",
-    timeZone,
+    timeZone: displayTimeZone,
   }).format(new Date(event.startsAt));
   const end = new Intl.DateTimeFormat("en-HK", {
     hour: "numeric",
     minute: "2-digit",
-    timeZone,
+    timeZone: displayTimeZone,
   }).format(new Date(event.endsAt));
-  return `${date}, ${start}–${end} (${timeZone})`;
+  return `${date}, ${start}–${end} (${zoneLabel})`;
 }
 
 function expiryWhen(value: string): string {
