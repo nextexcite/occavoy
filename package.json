@@ -17,12 +17,16 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "check:python": "uv run ruff check experiments scripts && uv run ruff format --check experiments scripts && uv run --package occavoy-evals pytest experiments/evals/tests",
+    "check:python": "uv run ruff check experiments scripts && uv run ruff format --check experiments scripts && uv run --package occavoy-evals pytest experiments/evals/tests scripts/tests",
+    "local:exec": "node scripts/local-exec.mjs",
     "verify:runtime": "pnpm --filter @occavoy/runtime verify:restart",
     "verify:harness": "pnpm --filter @occavoy/runtime verify:harness",
+    "verify:case-recovery": "pnpm --filter @occavoy/runtime verify:case-recovery",
     "demo:lifecycle": "node --import tsx scripts/demo-case-lifecycle.ts",
     "deploy:web": "pnpm --filter @occavoy/web deploy",
-    "experiment:new": "uv run python scripts/new_experiment.py"
+    "experiment:new": "uv run python scripts/new_experiment.py",
+    "verify:london": "pnpm --filter @occavoy/runtime verify:london",
+    "demo:london": "pnpm --filter @occavoy/runtime demo:london"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.9",

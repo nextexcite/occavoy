@@ -1,15 +1,12 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createClient } from "rivetkit/client";
 import { createProbeCredential, PROBE_LIMITS } from "../dist/probe-protocol.js";
+import { createNativeHost, poll } from "./native-host.mjs";
 
 if (process.platform === "win32")
   throw new Error("The process-crash qualification requires POSIX process signals.");
@@ -17,94 +14,17 @@ if (process.platform === "win32")
 const directory = await mkdtemp(join(tmpdir(), "occavoy-harness-"));
 const serverPath = fileURLToPath(new URL("../dist/server.js", import.meta.url));
 const secret = randomBytes(32).toString("hex");
-async function unusedPort() {
-  const listener = createServer();
-  listener.listen(0, "127.0.0.1");
-  await once(listener, "listening");
-  const port = listener.address().port;
-  await new Promise((resolve, reject) =>
-    listener.close((error) => (error ? reject(error) : resolve())),
-  );
-  return port;
-}
-const port = await unusedPort();
-const enginePort = await unusedPort();
-const endpoint = `http://127.0.0.1:${enginePort}`;
-const childEnv = {
-  ...process.env,
-  NODE_ENV: "test",
-  OCCAVOY_RUNTIME_MODE: "local",
-  OCCAVOY_RUNTIME_DEMO_TOKEN: secret,
-  RIVET_RUN_ENGINE_HOST: "127.0.0.1",
-  RIVET_RUN_ENGINE_PORT: String(enginePort),
-  PORT: String(port),
-  NO_COLOR: "1",
-};
-for (const name of [
-  "RIVET_ENDPOINT",
-  "RIVET_TOKEN",
-  "RIVET_POOL",
-  "RIVETKIT_RUNTIME_MODE",
-  "OCCAVOY_PROBE_HOLD",
-])
-  delete childEnv[name];
-let running;
+const host = await createNativeHost({
+  entry: serverPath,
+  cwd: directory,
+  env: { OCCAVOY_RUNTIME_DEMO_TOKEN: secret },
+});
+const endpoint = host.endpoint;
 let client;
-let logs = "";
 const evidence = [];
 
-async function poll(read, predicate, label, timeoutMs = 20_000) {
-  const deadline = Date.now() + timeoutMs;
-  let last;
-  while (Date.now() < deadline) {
-    last = await read();
-    if (predicate(last)) return last;
-    await delay(100);
-  }
-  throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
-}
-
 async function start(holdAt) {
-  const child = spawn(process.execPath, [serverPath], {
-    cwd: directory,
-    env: { ...childEnv, ...(holdAt ? { OCCAVOY_PROBE_HOLD: holdAt } : {}) },
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const exited = once(child, "exit");
-  for (const stream of [child.stdout, child.stderr])
-    stream.on("data", (data) => {
-      logs = (logs + data).slice(-30_000);
-    });
-  running = { child, exited };
-  await poll(
-    async () => {
-      if (child.exitCode !== null || child.signalCode !== null)
-        throw new Error("Runtime exited before liveness.");
-      try {
-        return (
-          await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(1000) })
-        ).ok;
-      } catch {
-        return false;
-      }
-    },
-    Boolean,
-    "Runtime liveness",
-    30_000,
-  );
-  await poll(
-    async () => {
-      try {
-        return (await fetch(`${endpoint}/metadata`, { signal: AbortSignal.timeout(1000) })).ok;
-      } catch {
-        return false;
-      }
-    },
-    Boolean,
-    "Rivet gateway readiness",
-    30_000,
-  );
+  await host.start(holdAt ? { OCCAVOY_PROBE_HOLD: holdAt } : {});
   client = createClient(endpoint);
 }
 
@@ -140,62 +60,7 @@ function settledAfterRestart(job, beforeCrash) {
 }
 
 async function stop(crash = false) {
-  const active = running;
-  if (!active) return;
-  const { child, exited } = active;
-  if (child.exitCode !== null || child.signalCode !== null) {
-    running = undefined;
-    return;
-  }
-  if (crash) {
-    // Only children of the process this test owns. Rivet's local engine uses its own group.
-    const children = spawnSync("pgrep", ["-P", String(child.pid)], { encoding: "utf8" });
-    if (children.error) throw children.error;
-    const enginePids = children.stdout.trim().split("\n").filter(Boolean).map(Number);
-    process.kill(-child.pid, "SIGKILL");
-    for (const pid of enginePids) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch (error) {
-        if (error.code !== "ESRCH") throw error;
-      }
-    }
-    const [, signal] = await exited;
-    assert.equal(signal, "SIGKILL");
-    await poll(
-      async () => {
-        try {
-          await fetch(endpoint, { signal: AbortSignal.timeout(500) });
-          return false;
-        } catch {
-          return true;
-        }
-      },
-      Boolean,
-      "Killed local engine release",
-      5_000,
-    );
-  } else {
-    child.kill("SIGTERM");
-    const deadline = setTimeout(() => child.kill("SIGKILL"), 15_000);
-    const [, signal] = await exited;
-    clearTimeout(deadline);
-    if (signal === "SIGKILL") throw new Error("Runtime did not drain before cleanup deadline.");
-    await poll(
-      async () => {
-        try {
-          await fetch(endpoint, { signal: AbortSignal.timeout(500) });
-          return false;
-        } catch {
-          return true;
-        }
-      },
-      Boolean,
-      "Stopped local engine release",
-      10_000,
-    );
-  }
-  running = undefined;
+  await host.stop(crash);
 }
 
 try {
@@ -327,7 +192,7 @@ try {
     ),
   );
 } catch (error) {
-  console.error(logs.replaceAll(secret, "[REDACTED]"));
+  console.error(host.logs());
   throw error;
 } finally {
   await stop();

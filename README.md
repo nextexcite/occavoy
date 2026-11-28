@@ -27,10 +27,15 @@ mise run dev
 The web preview runs at `http://localhost:3000`. In another terminal:
 
 ```sh
-export OCCAVOY_RUNTIME_MODE=local
-export OCCAVOY_RUNTIME_DEMO_TOKEN="$(openssl rand -hex 32)"
+mise run secrets:refresh
 mise run runtime
 ```
+
+The refresh materializes the ignored `.env.local` snapshot; the runtime preloads its narrow
+local names automatically — see [environment configuration](docs/environment.md). Without
+secret-store access, explicit shell exports are the fallback:
+`export OCCAVOY_RUNTIME_MODE=local` plus a private `OCCAVOY_RUNTIME_DEMO_TOKEN` of at least
+32 characters (for example `$(openssl rand -hex 32)`).
 
 The runtime contains the Postgres-backed case coordinator and two isolated qualification actors.
 The web screens preview local data; they do not submit a case. The runtime start command and verification
@@ -52,8 +57,11 @@ The first is a synthetic business-state scenario. The second exercises the actua
 integration with a scripted model provider and no paid inference. Neither command establishes a
 deployed commercial service.
 
-For the [local HTTP-to-supplier case trace](docs/local-case-trace.md), use disposable Postgres.
-It shows one lost supplier reply reconciled without a second order; identity, model work and supply are fixtures.
+To see what durability changes for a customer, run `mise exec -- pnpm demo:london` with the
+disposable Compose Postgres on port 54329. The [saved-case walkthrough](docs/london-saved-case.md)
+lets you reopen the original request, approve one synthetic event-access offer and watch a lost
+supplier reply get resolved without rebooking. `pnpm verify:london` runs it unattended. [Watch the offline recording (MP4)](docs/london-offline-demo.mp4).
+The [earlier HTTP-to-supplier and RFQ-only traces](docs/local-case-trace.md) remain separate checks.
 
 ```sh
 mise run check

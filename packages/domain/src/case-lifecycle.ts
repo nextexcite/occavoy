@@ -742,6 +742,11 @@ export function decideCase(
       }
       const check = checkProposalApproval(proposal, current.approval, now);
       if (!check.ok) return stop(check.reason);
+      const quote = current.quotes.find(
+        (candidate) =>
+          candidate.id === proposal.quoteId && candidate.version === proposal.quoteVersion,
+      );
+      if (!quote || !beforeExpiry(quote.validUntil, now)) return stop("quote_expired_or_missing");
       if (command.kind === "retry_handoff") {
         if (current.action?.id !== command.actionId || current.action.status !== "not_executed") {
           return stop("proof_of_nonexecution_required");

@@ -17,8 +17,9 @@ export function createRuntimeRegistry(
     }) => ServiceCaseCoordinator;
   } & Pick<
     CreateServiceCaseActorOptions,
-    "piJobInvoker" | "cancelAgentTask" | "requestSupplierQuote"
+    "piJobInvoker" | "cancelAgentTask" | "requestSupplierQuote" | "staleDispatchMs"
   >,
+  additionalActors: NonNullable<Parameters<typeof setup>[0]>["use"] = {},
 ) {
   const serviceCaseOptions: CreateServiceCaseActorOptions = {};
   if (config.databaseUrl) serviceCaseOptions.databaseUrl = config.databaseUrl;
@@ -30,11 +31,15 @@ export function createRuntimeRegistry(
   if (options?.requestSupplierQuote) {
     serviceCaseOptions.requestSupplierQuote = options.requestSupplierQuote;
   }
+  if (options?.staleDispatchMs !== undefined) {
+    serviceCaseOptions.staleDispatchMs = options.staleDispatchMs;
+  }
   return setup({
     runtime: "native",
     startEngine: config.mode === "local",
     startServices: false,
     use: {
+      ...additionalActors,
       demoCase: createDemoCaseActor(config.demoToken),
       reasoningProbe: createReasoningProbeActor(config.demoToken, config.probeHold),
       serviceCase: createServiceCaseActor(config.demoToken, serviceCaseOptions),

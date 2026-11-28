@@ -14,28 +14,31 @@ import {
 } from "../src/fake-supplier";
 import { applyMigrations } from "../src/migrations";
 import { PostgresCaseStore } from "../src/postgres-case-store";
+import { testDatabaseUrl } from "./support/disposable-postgres";
 
 const now = new Date("2027-01-01T12:00:00Z");
-const database = process.env.DATABASE_URL;
+const database = testDatabaseUrl();
 
 describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier)", () => {
   let pool: pg.Pool;
   let admin: pg.Pool;
   let store: PostgresCaseStore;
   const schema = `oca6_${randomUUID().replaceAll("-", "")}`;
+  let schemaCreated = false;
   beforeAll(async () => {
     admin = new pg.Pool({ connectionString: database });
     const create = await admin.query("SELECT format('CREATE SCHEMA %I', $1::text) AS ddl", [
       schema,
     ]);
     await admin.query(create.rows[0].ddl);
+    schemaCreated = true;
     pool = new pg.Pool({ connectionString: database, options: `-c search_path=${schema}` });
     await applyMigrations(pool);
-    store = new PostgresCaseStore(pool);
+    store = new PostgresCaseStore(pool, () => now);
   });
   afterAll(async () => {
     await pool?.end();
-    if (pool) {
+    if (schemaCreated) {
       const drop = await admin.query("SELECT format('DROP SCHEMA %I CASCADE', $1::text) AS ddl", [
         schema,
       ]);
@@ -56,6 +59,7 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
     const scope = { tenantId, caseId };
     const proposal = { ...fixture.proposals[0]!, ...scope };
     const approval = { ...fixture.approval!, ...scope };
+    const quote = { ...fixture.quotes[0]!, ...scope };
     const authority: CaseAuthority = {
       ...scope,
       actorId: "runtime-fixture",
@@ -83,7 +87,7 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
       },
       fault,
     );
-    const dispatcher = new DeterministicEffectDispatcher(store, supplier);
+    const dispatcher = new DeterministicEffectDispatcher(store, supplier, () => now);
     await store.createCase({
       relationship: { ...relationship, tenantId },
       caseId,
@@ -137,11 +141,11 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
       candidate: { task: activated.activeTask!, requirements: fixture.requirements },
     });
     await apply({ kind: "request_quote", rfq: fixture.rfq! });
-    await apply({ kind: "record_quote", quote: { ...fixture.quotes[0]!, ...scope } });
+    await apply({ kind: "record_quote", quote });
     await apply({ kind: "stage_proposal", proposal });
     await apply({ kind: "publish_proposal" });
     await apply({ kind: "approve_proposal", approval });
-    return { input, supplier, dispatcher, submit, apply, state, proposal };
+    return { input, supplier, dispatcher, submit, apply, state, proposal, quote };
   }
 
   it("commits intent before the lost response; a restarted dispatcher looks up exactly one original order", async () => {
@@ -192,7 +196,11 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
       evidenceRef: "synthetic:paid",
     });
     expect(payment).toMatchObject({ booking: "pending", payment: "paid", fulfillment: "pending" });
-    const recovered = new DeterministicEffectDispatcher(new PostgresCaseStore(pool), supplier);
+    const recovered = new DeterministicEffectDispatcher(
+      new PostgresCaseStore(pool, () => now),
+      supplier,
+      () => now,
+    );
     const fenceSpy = vi.spyOn(supplier, "fenceHandoffAttempt");
     await expect(recovered.dispatchApprovedHandoff(input)).rejects.toThrow(
       "reconciliation_required",
@@ -308,7 +316,11 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
       fault.mockRestore();
     }
     expect((await state()).action?.status).toBe("dispatching");
-    const recovered = new DeterministicEffectDispatcher(new PostgresCaseStore(pool), supplier);
+    const recovered = new DeterministicEffectDispatcher(
+      new PostgresCaseStore(pool, () => now),
+      supplier,
+      () => now,
+    );
     const operator = {
       ...input,
       authority: { ...input.authority, actorId: "operator-1", grantId: "operator-grant" },
@@ -353,7 +365,11 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
       }
       expect(await state()).toMatchObject({ action: { status: "dispatching", attempts: 1 } });
       expect(supplier.submitCalls).toBe(0);
-      const recovered = new DeterministicEffectDispatcher(new PostgresCaseStore(pool), supplier);
+      const recovered = new DeterministicEffectDispatcher(
+        new PostgresCaseStore(pool, () => now),
+        supplier,
+        () => now,
+      );
       const target = { ...input, attempt: 1 };
       await expect(recovered.reconcileUnknownAction(input)).rejects.toThrow(
         "dispatch_still_in_flight",
@@ -637,6 +653,140 @@ describe.skipIf(!database)("effect dispatcher (real Postgres, synthetic supplier
     ).rejects.toThrow("quote_expired_or_missing");
     expect((await state()).action).toBeNull();
     expect(supplier.submitCalls).toBe(0);
+  });
+
+  it("takes the dispatch expiry decision under the locked case row, not the caller's stale time", async () => {
+    const { input, supplier, state, proposal } = await setup();
+    const beforeExpiryTime = new Date(Date.parse(proposal.validUntil) - 1_000);
+    let lockedNow = beforeExpiryTime;
+    const lockingStore = new PostgresCaseStore(pool, () => lockedNow);
+    const dispatcher = new DeterministicEffectDispatcher(lockingStore, supplier, () => lockedNow);
+    const locker = await pool.connect();
+    let transactionOpen = false;
+    let dispatch: Promise<unknown> | undefined;
+    let dispatchObserved = false;
+    try {
+      await locker.query("BEGIN");
+      transactionOpen = true;
+      const lockerPid = (await locker.query("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      await locker.query(
+        "SELECT id FROM service_cases WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+        [input.tenantId, input.caseId],
+      );
+      dispatch = dispatcher.dispatchApprovedHandoff(input);
+      let blocked = false;
+      const started = Date.now();
+      while (!blocked && Date.now() - started < 3_000) {
+        const wait = await pool.query(
+          `SELECT EXISTS (
+             SELECT 1 FROM pg_catalog.pg_stat_activity AS a
+             WHERE $1::integer = ANY(pg_catalog.pg_blocking_pids(a.pid))
+               AND a.wait_event_type = 'Lock'
+               AND a.query LIKE '%FROM service_cases%FOR UPDATE%'
+           ) AS blocked`,
+          [lockerPid],
+        );
+        blocked = wait.rows[0]!.blocked;
+        if (!blocked) await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(blocked).toBe(true);
+      lockedNow = new Date(proposal.validUntil);
+      await locker.query("COMMIT");
+      transactionOpen = false;
+      await expect(dispatch).rejects.toThrow("approval_expired_or_invalid");
+      dispatchObserved = true;
+      expect(supplier.submitCalls).toBe(0);
+      expect((await state()).action).toBeNull();
+      const receipt = await pool.query(
+        `SELECT outcome, reason FROM case_commands
+         WHERE tenant_id = $1 AND case_id = $2 AND command_kind = 'dispatch_handoff'`,
+        [input.tenantId, input.caseId],
+      );
+      expect(receipt.rows).toEqual([
+        { outcome: "rejected", reason: "approval_expired_or_invalid" },
+      ]);
+    } finally {
+      if (transactionOpen) await locker.query("ROLLBACK").catch(() => {});
+      if (dispatch && !dispatchObserved) await dispatch.catch(() => {});
+      locker.release();
+    }
+  });
+
+  it("rechecks the send window after intent commit and preserves the original reference as unknown", async () => {
+    const { input, supplier, state, proposal } = await setup();
+    const beforeExpiryTime = new Date(Date.parse(proposal.validUntil) - 1_000);
+    const reducerNow = beforeExpiryTime;
+    let sendNow = beforeExpiryTime;
+    const clockedStore = new PostgresCaseStore(pool, () => reducerNow);
+    const dispatcher = new DeterministicEffectDispatcher(clockedStore, supplier, () => sendNow);
+    const originalSubmit = clockedStore.submitCommand.bind(clockedStore);
+    const submitSpy = vi
+      .spyOn(clockedStore, "submitCommand")
+      .mockImplementation(async (command, context) => {
+        const result = await originalSubmit(command, context);
+        sendNow = new Date(proposal.validUntil);
+        return result;
+      });
+    try {
+      const observed = await dispatcher.dispatchApprovedHandoff(input);
+      expect(supplier.submitCalls).toBe(0);
+      expect(supplier.orderCount).toBe(0);
+      expect(observed.action).toMatchObject({
+        status: "unknown",
+        clientReference: input.clientReference,
+        requestHash: input.requestHash,
+      });
+      expect(observed.action?.evidenceRefs).toContain(
+        `dispatch-window-closed:${input.clientReference}`,
+      );
+      expect(observed.booking).toBe("pending");
+      await expect(dispatcher.retryApprovedHandoff({ ...input, attempt: 1 })).rejects.toThrow(
+        "reconciliation_required",
+      );
+      expect(supplier.submitCalls).toBe(0);
+      expect((await state()).action?.clientReference).toBe(input.clientReference);
+    } finally {
+      submitSpy.mockRestore();
+    }
+  });
+
+  it("rechecks grant-only expiry after intent commit and leaves the dispatching obligation", async () => {
+    const { input, supplier, state, proposal } = await setup();
+    const reducerNow = now;
+    const authorityExpiry = new Date(now.getTime() + 1_000);
+    expect(Date.parse(proposal.validUntil)).toBeGreaterThan(authorityExpiry.getTime());
+    const expiringInput = {
+      ...input,
+      authority: { ...input.authority, validUntil: authorityExpiry.toISOString() },
+    };
+    let sendNow = reducerNow;
+    const clockedStore = new PostgresCaseStore(pool, () => reducerNow);
+    const dispatcher = new DeterministicEffectDispatcher(clockedStore, supplier, () => sendNow);
+    const originalSubmit = clockedStore.submitCommand.bind(clockedStore);
+    const submitSpy = vi
+      .spyOn(clockedStore, "submitCommand")
+      .mockImplementation(async (command, context) => {
+        const result = await originalSubmit(command, context);
+        sendNow = authorityExpiry;
+        return result;
+      });
+    try {
+      await expect(dispatcher.dispatchApprovedHandoff(expiringInput)).rejects.toThrow(
+        "authority_or_scope_mismatch",
+      );
+      expect(supplier.submitCalls).toBe(0);
+      expect(supplier.orderCount).toBe(0);
+      const current = await state();
+      expect(current.action).toMatchObject({
+        status: "dispatching",
+        clientReference: input.clientReference,
+        requestHash: input.requestHash,
+      });
+      expect(current.booking).not.toBe("confirmed");
+      expect(current.action?.providerReference ?? null).toBeNull();
+    } finally {
+      submitSpy.mockRestore();
+    }
   });
 
   it("records proof of nonexecution only after lookup; never automatically resubmits", async () => {

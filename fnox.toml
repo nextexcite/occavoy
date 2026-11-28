@@ -1,0 +1,12 @@
+# Value-free mapping only: the local profile selects named variables from the
+# occavoy/local Doppler config into the ignored .env.local snapshot. No secrets,
+# keys, or other profiles live here; see docs/environment.md.
+[profiles.local.providers.doppler]
+type = "doppler"
+project = "occavoy"
+config = "local"
+
+[profiles.local.secrets]
+DATABASE_URL = { provider = "doppler", value = "DATABASE_URL", if_missing = "error" }
+OCCAVOY_RUNTIME_MODE = { provider = "doppler", value = "OCCAVOY_RUNTIME_MODE", if_missing = "error" }
+OCCAVOY_RUNTIME_DEMO_TOKEN = { provider = "doppler", value = "OCCAVOY_RUNTIME_DEMO_TOKEN", if_missing = "error" }

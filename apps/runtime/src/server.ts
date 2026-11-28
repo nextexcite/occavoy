@@ -17,6 +17,30 @@ const server = createServer((request, response) => {
 });
 server.listen(config.port, config.mode === "local" ? "127.0.0.1" : "0.0.0.0");
 
+const metricsServer =
+  config.mode === "cloud"
+    ? createServer((request, response) => {
+        if (request.method !== "GET" || request.url !== "/metrics") {
+          response.writeHead(404).end();
+          return;
+        }
+        registry.routes
+          .prometheusMetrics()
+          .then(async (metrics) => {
+            response.writeHead(metrics.status, Object.fromEntries(metrics.headers.entries()));
+            response.end(Buffer.from(await metrics.arrayBuffer()));
+          })
+          .catch(() => response.writeHead(500).end());
+      })
+    : null;
+metricsServer?.listen(config.metricsPort, "127.0.0.1");
+
 // Rivet installs its own signal-driven drain; close our auxiliary listener too.
-process.once("SIGTERM", () => server.close());
-process.once("SIGINT", () => server.close());
+process.once("SIGTERM", () => {
+  server.close();
+  metricsServer?.close();
+});
+process.once("SIGINT", () => {
+  server.close();
+  metricsServer?.close();
+});

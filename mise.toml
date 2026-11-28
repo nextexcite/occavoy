@@ -5,10 +5,15 @@ node = "26.13.1"
 pnpm = "12.23.0"
 python = "3.15.2"
 uv = "0.13.10"
+fnox = "1.50.0"
 
 [env]
 UV_PYTHON = "3.15.2"
 R2_CAPACITY_BYTES = "8000000000"
+
+[tasks."secrets:refresh"]
+description = "Refresh the ignored local env file from the fnox local profile"
+run = "python scripts/fnox_refresh.py --profile local --output .env.local"
 
 [tasks.bootstrap]
 description = "Install both locked workspaces"

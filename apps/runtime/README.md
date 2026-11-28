@@ -20,6 +20,10 @@ The runtime build typechecks and then bundles the runtime with first-party works
 
 ## Durable reasoning probe
 
+For a case-backed recovery test rather than the standalone probe, run `mise exec -- pnpm verify:case-recovery` with the disposable Compose Postgres on port 54329. See the [HTTP activation to RFQ trace](../../docs/local-case-trace.md#local-pi-recovery-http-activation-to-rfq) for the process fault, measured usage and evidence boundaries.
+
+To follow that same recovered case through a customer's return visit, exact approval and reconciliation of one synthetic booking, run `mise exec -- pnpm demo:london` in a terminal or `mise exec -- pnpm verify:london` unattended. The [London walkthrough](../../docs/london-saved-case.md) gives the fixture boundaries and expected checkpoints. Neither command mounts fixture routes or faults on the default server.
+
 The selected compatible combination is `@rivet-dev/pi` **0.5.7**, `@earendil-works/{chord,pi-ai,pi-durable,pi-schema,pi-telemetry}` **1.5.2**, and `rivetkit` **3.1.1**. Pi 1.6.1 is newer but falls outside this adapter's `~1.5.0` peer range. The adapter accepts Rivet 3.x. Pi Durable remains experimental; these exact pins are a tested combination, not a claim of a stable future API. See the [published adapter manifest](https://registry.npmjs.org/@rivet-dev%2fpi/0.5.7) and [official integration guide](https://rivet.dev/ecosystem/pi-durable/).
 
 Run the qualification without a model key or a separately running server:
@@ -71,20 +75,20 @@ A long-lived ServiceCase coordinator and a bounded AgentTask are separate respon
 
 ## Local development
 
-From the repository root, install the pinned mise tools and workspace dependencies. Set a private token in the shell; do not commit its value or expose it in browser JavaScript.
+From the repository root, install the pinned mise tools and workspace dependencies, then refresh the local env snapshot. Never commit secret values or expose them in browser JavaScript.
 
 ```sh
 mise install
 mise exec -- pnpm install --frozen-lockfile
-export OCCAVOY_RUNTIME_MODE=local
-export OCCAVOY_RUNTIME_DEMO_TOKEN="$(openssl rand -hex 32)"
-export DATABASE_URL="postgres://USER:PASSWORD@HOST:PORT/DATABASE"
+mise run secrets:refresh
 mise exec -- pnpm --filter @occavoy/runtime dev
 ```
 
+The `dev` script preloads the narrow local names from the ignored `.env.local` snapshot; see [docs/environment.md](../../docs/environment.md) for the refresh lane, the loader contract, and the shell-export fallback. A safe disposable `DATABASE_URL` target is the Compose Postgres fixture at `postgresql://127.0.0.1:54329/occavoy` with the public local-only `occavoy`/`occavoy` credentials.
+
 The local native SDK starts a development control plane at `http://localhost:6420`. The auxiliary HTTP listener is `http://127.0.0.1:8080/healthz`. Its response is process liveness only; it does not prove actor connectivity, durability, or cloud deployment. The `startServices:false` setting avoids starting unrelated services.
 
-The token must be present in the verification shell too. A token changes authentication, not actor state. Keep local engine data outside a published repository; never commit credentials or local state.
+Unlike `dev` and `test`, `verify:live` does not preload the snapshot: pass the same values explicitly (for example through `pnpm local:exec` from the repository root) so the verification shell shares the token. A token changes authentication, not actor state. Keep local engine data outside a published repository; never commit credentials or local state.
 
 ## Meaningful verification
 
@@ -96,7 +100,7 @@ mise exec -- pnpm --filter @occavoy/runtime verify:restart
 mise exec -- pnpm --filter @occavoy/runtime verify:harness
 ```
 
-The automated SQLite tests cover accepted-command persistence after reopening a database, transactional rollback at the state/result boundary, duplicate/conflicting input, concurrent duplicate receipts, pause/resume, and fail-closed production configuration. When `DATABASE_URL` is present, the service-case tests additionally cover Postgres-backed supplier waiting, replacement-coordinator recovery, duplicate delivery, cancellation/revision fencing, pre-dispatch stale-task fencing, budget exhaustion, reconciliation lookup attribution, and follow-up case allowances. They do not substitute for the real Rivet integration check. `verify:restart` starts a local native runtime, prepares a paused case, replaces its process using SIGTERM, and resumes the same case. It generates an in-memory credential and temporary checkpoint, and requires no separately running development server. This proves neither abrupt-failure recovery nor Cloud operation.
+The automated SQLite tests cover accepted-command persistence after reopening a database, transactional rollback at the state/result boundary, duplicate/conflicting input, concurrent duplicate receipts, pause/resume, and fail-closed production configuration. When `OCCAVOY_TEST_DATABASE_URL` explicitly selects the disposable Compose fixture, the service-case tests additionally cover Postgres-backed supplier waiting, replacement-coordinator recovery, duplicate delivery, cancellation/revision fencing, pre-dispatch stale-task fencing, budget exhaustion, reconciliation lookup attribution, and follow-up case allowances. They do not substitute for the real Rivet integration check. `verify:restart` starts a local native runtime, prepares a paused case, replaces its process using SIGTERM, and resumes the same case. It generates an in-memory credential and temporary checkpoint, and requires no separately running development server. This proves neither abrupt-failure recovery nor Cloud operation.
 
 Current dated evidence is indexed in the [implementation handoff](../../docs/implementation-handoff.md#starting-evidence). Earlier, on **2026-11-27** with Node **26.13.1**, TypeScript **7.0.2** and RivetKit **3.1.1**: typecheck/build passed and the real local `verify:restart` check passed. The recovered `demoCase` retained its paused revision before continuing; duplicate application, conflicting command rejection and failed authentication were also checked. This legacy fixture checks SIGTERM replacement. The separate reasoning probe's SIGKILL evidence is described above. Docker image construction, Rivet Cloud deployment, machine loss, real provider side effects, production tenant isolation and backup restoration remain unverified.
 
@@ -108,7 +112,7 @@ mise exec -- pnpm --filter @occavoy/runtime verify:live --prepare
 mise exec -- pnpm --filter @occavoy/runtime verify:live --resume
 ```
 
-The checkpoint contains only a synthetic actor key and expected revision; no token. Run both commands from the same directory. By default verification permits only a local endpoint. Testing a remote isolated demo namespace additionally requires `OCCAVOY_VERIFY_REMOTE=1` and `OCCAVOY_RUNTIME_VERIFY_ENDPOINT`; this does not authorize deploying anything.
+The private checkpoint records the resolved actor ID and expected paused revision, not a token. Use the same directory for both phases and a fresh checkpoint path for each run (`OCCAVOY_RUNTIME_CHECKPOINT`). Resume addresses that ID without creating an actor. This verifier uses the standard local engine credentials and accepts only a plain loopback HTTP origin; the former remote opt-in is not supported.
 
 ## Legacy command probe client API
 
@@ -137,15 +141,30 @@ On wake, pending SQLite commands are notified again. Duplicate pending submissio
 
 Cloud mode uses `runtime:"native"`, `startEngine:false`, and `startServices:false`. Rivet Cloud provides its own control plane and injects `RIVET_ENDPOINT`, `RIVET_TOKEN` and `RIVET_POOL`; do not override those variables on a hosted node. Set `OCCAVOY_RUNTIME_DEMO_TOKEN` as a private cluster secret. The Dockerfile sets `OCCAVOY_RUNTIME_MODE=cloud`, and production refuses an implicit local mode.
 
-After a cluster and Docker access have been explicitly set up, the documented deployment path from the repository root is:
+The production image omits the local engine CLI and development services; use the workspace for local engine runs. In cloud mode the runtime serves Prometheus metrics at `http://127.0.0.1:9464/metrics` inside the container. Set `RIVETKIT_METRICS_PORT` only if a different port is needed. Keep it distinct from `PORT` and other listeners; a bind collision stops startup. Scraping from inside the container does not prove that a hosted collector can reach it.
 
-```sh
-mise exec -- pnpm exec rivet login
-mise exec -- pnpm exec rivet link --org ORGANIZATION --cluster CLUSTER
-mise exec -- pnpm exec rivet deploy --dockerfile apps/runtime/Dockerfile --build-context .
-```
+### Private dev checkpoint (OCA-2)
 
-These commands are instructions, not a record that deployment happened. The image builds with the workspace lockfile and `pnpm deploy --prod`. Public app liveness is `https://CLUSTER.onrivet.dev/healthz`; actor gateway/API is `https://CLUSTER-api.onrivet.dev`. Do not add automatic deploy-on-PR CI during bootstrap. A successful local test or Docker build does not prove cloud credentials, quotas, HA or recovery.
+[OCA-2](https://linear.app/tianjis/issue/OCA-2) is a hosted qualification, not a deployment recipe. Local image construction, a ready build and `/healthz` are not a checkpoint. Do not run local verification drivers against Cloud.
+
+Before any hosted write, the owners must supply or confirm:
+
+- A read-only delivery scoped to Doppler `occavoy/dev`, through the approved secret channel. Bind only the named settings needed by each process. No whole-config export, broad fallback, copied snapshot, secret in argv or inherited `OPENAI_*` in a synthetic run.
+- Keep the permanent Prisma Postgres dev binding (`occavoy/dev:DATABASE_URL`) scoped to approved application use. It was rebound through the dedicated write token and verified through the separate read-only token without printing its value. The dev schema was migrated through migration version `007_outbox_dispatched_index`; direct application probes confirmed connection identity, TLS on the client hop, advisory-lock migration idempotence, quota transactionality, attempt fencing, case-job scoping, intervention records, outbox ordering and concurrent initializer behavior. This does not make it a disposable test target. Ordinary database tests still require an explicit Compose-owned `OCCAVOY_TEST_DATABASE_URL`. The minimal `demoCase` checkpoint uses actor SQLite and does not need this binding injected.
+- The private ingress and explicit organization, cluster, region and runner pool, the exact image revision, resource limits, secret references and a bounded replacement/cleanup plan. Prove actor creation and worker placement are confined to that pool; a CLI deployment target alone is insufficient. Obtain approval for the exact operations, including actor creation, credential issuance if needed, and replacing just the probe worker. The pinned 3.1.1 managed-cluster rollout rejects every non-default runner-pool name with “only the `default` runner pool is supported for now.” This may be a Free-tier restriction, but the observed error does not say so. For the first actor proof only, the owner explicitly approved `default` on this otherwise empty dedicated dev cluster as a documented deviation. Do not generalize that exception: use a dedicated non-default pool for later proofs when Rivet Cloud supports one, or use BYOC/self-hosted Rivet if that isolation is mandatory. A ready uploaded build by itself is not qualification and does not create a runner, actor or checkpoint.
+- Separate gateway and actor authentication. For the pinned [3.1.1 gateway](https://github.com/rivet-dev/rivet/blob/v3.1.1/docs/api/content/authentication.mdx), use a backend client with a short-lived `actor_gateway:read` grant on the exact actor ID after authorized creation. That grant allows actor actions; it does not grant creation by key or replace the `authToken` connection parameter checked by `demoCase`. Confirm how the client receives its grant without reusing a node or control-plane secret. Use secret references for deployment, never literal secret values.
+
+Once approved, start one synthetic `demoCase` in the approved pool (`default` only for the first managed-cloud proof under the deviation above). Wait for `awaiting_input`, pause and read the committed paused revision 1. Record the real actor ID privately. Confirm replacement of the serving worker from the platform, then reconnect **by that same ID**, not `getOrCreate`. Require the same paused state before resume, `client_input` at revision 2, and one synthetic input applied at revision 3. A duplicate must not advance the revision. Check missing/invalid gateway access separately from a valid gateway credential with a wrong actor token: require explicit authorization denials and a successful authorized read, not a generic network failure. Keep raw IDs and logs private; report equality, build revision, observed transitions and redacted results only. Stop at this gate.
+
+Use [`test/verify-hosted.mjs`](test/verify-hosted.mjs) for that proof. It requires a plain credentialless `RIVET_ENDPOINT`, an in-memory engine admin credential used only by the trusted verifier to create the actor and mint a short-lived exact-actor `actor_gateway:read` grant, the application demo token, an explicit pool, and a private `OCCAVOY_HOSTED_ACTOR_RECORD` path. `default` additionally requires `OCCAVOY_VERIFY_ALLOW_DEFAULT=1`. The verifier never prints the actor ID or either credential. Destroy the synthetic actor after the proof.
+
+#### First managed-cloud proof evidence (2026-11-28)
+
+The owner-approved first proof used the documented `default`-pool deviation on the otherwise empty dedicated dev cluster. Deployment used the ready `occavoy-runtime:2c6a244` build, one ready `e2-small` runner, an empty runner CIDR allowlist, and a secret reference named `OCCAVOY_RUNTIME_DEMO_TOKEN`. The cluster secret was synchronized to the scoped Doppler value before the successful run; a stale pre-sync value had correctly produced actor-level `user/forbidden` denials.
+
+The successful proof created exactly one synthetic `demoCase`, privately recorded its ID in a `0600` temporary file, paused at revision 1, requested platform rescheduling, and observed runner generations 0 and 1 in platform logs. The same actor ID still held paused revision 1 after replacement. Resume reached `client_input` at revision 2; one synthetic input reached revision 3. A duplicate did not advance it, and conflicting reuse was rejected. Missing and invalid gateway tokens were rejected as `auth/invalid_token`; a valid exact-actor gateway grant with the wrong actor token was rejected as `user/forbidden`; the authorized read succeeded. The actor was then destroyed and the engine showed zero remaining `demoCase` actors. The node-listing API is not implemented in this managed cluster, so replacement evidence is the platform reschedule plus the independent runner-generation log transition, not a node-ID comparison. No inference, supplier, payment or booking call occurred.
+
+The [London replay](../../docs/london-saved-case.md) needs a separate private synthetic host: the standard registry has no Pi invoker or `caseJob`. Keep the Compose/loopback driver local; do not expose fixture controls. Use the isolated Postgres ledger, faux model and fake supplier, and match the local counters there before considering one separately approved, capped candidate-only inference task. No real supplier, charge or booking.
 
 ## Primary references
 

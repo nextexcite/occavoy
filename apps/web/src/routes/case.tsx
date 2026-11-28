@@ -50,7 +50,8 @@ function CasePreview() {
             Preview my request <span>→</span>
           </button>
           <p className="note">
-            This form previews the flow locally. The request is not saved or sent.
+            This form previews the flow locally. The request is not saved or sent. The local
+            saved-case demo is separate: run pnpm demo:london.
           </p>
         </form>
         <aside className="panel timeline">

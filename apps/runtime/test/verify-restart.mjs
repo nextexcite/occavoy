@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { inheritedEnvironment } from "./native-host.mjs";
 
 // All child processes share one host/network namespace, including isolated CI.
 // This is a local, graceful replacement probe. It never deploys or calls Cloud.
@@ -29,7 +30,7 @@ async function unusedPort() {
 const port = await unusedPort();
 const enginePort = await unusedPort();
 const childEnv = {
-  ...process.env,
+  ...inheritedEnvironment(),
   NODE_ENV: "test",
   OCCAVOY_RUNTIME_MODE: "local",
   OCCAVOY_RUNTIME_DEMO_TOKEN: token,
@@ -40,8 +41,6 @@ const childEnv = {
   PORT: String(port),
   NO_COLOR: "1",
 };
-for (const name of ["RIVET_ENDPOINT", "RIVET_TOKEN", "RIVET_POOL", "RIVETKIT_RUNTIME_MODE"])
-  delete childEnv[name];
 
 let server;
 let serverLog = "";

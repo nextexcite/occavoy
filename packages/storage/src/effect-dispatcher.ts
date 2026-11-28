@@ -29,6 +29,7 @@ export class DeterministicEffectDispatcher {
   constructor(
     private readonly store: PostgresCaseStore,
     private readonly supplier: SupplierAdapter,
+    private readonly clock: () => Date = () => new Date(),
   ) {}
 
   dispatchApprovedHandoff(input: ActionContext & { clientReference: string; requestHash: string }) {
@@ -79,7 +80,24 @@ export class DeterministicEffectDispatcher {
     if (intent.decision.outcome !== "applied") throw new Error(intent.decision.reason);
     if (intent.deduplicated) throw new Error("dispatch_already_received");
     const action = intent.decision.state.action!;
+    const sendTime = this.clock();
+    const canSend = [
+      quote.validUntil,
+      proposal.validUntil,
+      state.approval.validUntil,
+      input.authority.validUntil,
+    ].every((end) => Date.parse(end) > sendTime.getTime());
     let observation: Observation;
+    if (!canSend) {
+      observation = {
+        kind: "handoff_unknown",
+        actionId: action.id,
+        evidenceRef: `dispatch-window-closed:${action.clientReference}`,
+      };
+      const observed = await this.record({ ...input, now: this.clock() }, action, observation);
+      for (const id of intent.outboxIds) await this.store.completeOutbox(id);
+      return observed;
+    }
     try {
       const { providerReference } = await this.supplier.submitHandoff({
         attempt: action.attempts,
