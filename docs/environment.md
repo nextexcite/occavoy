@@ -81,7 +81,7 @@ there is no copying snapshots between machines or reverse-syncing values back in
 store. The portable ciphertext-publication lane and its key custody are deferred to
 Linear OCA-35.
 
-The shared inference settings (OPENAI_API_KEY, OPENAI_BASE_URL and OPENAI_WIRE_API) live in the Doppler root config and are inherited by local and dev only. They are not part of the routine local snapshot; rotate the parent rather than adding child overrides.
+The shared inference settings (OPENAI_API_KEY, OPENAI_BASE_URL and OPENAI_WIRE_API) live in the Doppler root config and are inherited by local and dev only. They are not part of the routine local snapshot; rotate the parent rather than adding child overrides. `OPENAI_WIRE_API` uses the Pi AI protocol identifier: `openai-responses` for OpenAI models through a Responses-capable endpoint, or `openai-completions` only when the selected model and endpoint require chat completions. The dev binding is `openai-responses`; setting it is configuration only and does not authorize inference.
 
 ## Dev binding reconciliation (OCA-2)
 
